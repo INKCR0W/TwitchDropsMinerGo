@@ -88,3 +88,87 @@ func TestPersistentJarDropsExpiredCookies(t *testing.T) {
 		t.Fatalf("过期 cookie 不应被恢复: %#v", cookies)
 	}
 }
+
+func TestPersistentJarClearDomainRemovesMatchingCookies(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "cookies.json")
+	jar, err := NewPersistentJar(path)
+	if err != nil {
+		t.Fatalf("NewPersistentJar 返回错误: %v", err)
+	}
+
+	twitchURL, err := url.Parse("https://www.twitch.tv")
+	if err != nil {
+		t.Fatalf("解析 Twitch URL 失败: %v", err)
+	}
+	otherURL, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatalf("解析其他 URL 失败: %v", err)
+	}
+
+	jar.SetCookies(twitchURL, []*http.Cookie{
+		{Name: "auth-token", Value: "token", Domain: "www.twitch.tv", Path: "/"},
+		{Name: "unique_id", Value: "device", Domain: ".twitch.tv", Path: "/"},
+		{Name: "host-only", Value: "host", Path: "/"},
+	})
+	jar.SetCookies(otherURL, []*http.Cookie{
+		{Name: "session", Value: "keep", Domain: "example.com", Path: "/"},
+	})
+
+	if err := jar.ClearDomain("twitch.tv"); err != nil {
+		t.Fatalf("ClearDomain 返回错误: %v", err)
+	}
+	if err := jar.Save(); err != nil {
+		t.Fatalf("Save 返回错误: %v", err)
+	}
+
+	reloadedJar, err := NewPersistentJar(path)
+	if err != nil {
+		t.Fatalf("重新创建 Cookie Jar 返回错误: %v", err)
+	}
+
+	if cookies := reloadedJar.Cookies(twitchURL); len(cookies) != 0 {
+		t.Fatalf("twitch 域名 Cookie 应已清空: %#v", cookies)
+	}
+
+	cookies := reloadedJar.Cookies(otherURL)
+	if len(cookies) != 1 || cookies[0].Name != "session" {
+		t.Fatalf("非目标域名 Cookie 不应被删除: %#v", cookies)
+	}
+}
+
+func TestPersistentJarClearRemovesAllCookies(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "cookies.json")
+	jar, err := NewPersistentJar(path)
+	if err != nil {
+		t.Fatalf("NewPersistentJar 返回错误: %v", err)
+	}
+
+	targetURL, err := url.Parse("https://www.twitch.tv")
+	if err != nil {
+		t.Fatalf("解析 URL 失败: %v", err)
+	}
+
+	jar.SetCookies(targetURL, []*http.Cookie{
+		{Name: "auth-token", Value: "token", Domain: "www.twitch.tv", Path: "/"},
+	})
+
+	if err := jar.Clear(); err != nil {
+		t.Fatalf("Clear 返回错误: %v", err)
+	}
+	if err := jar.Save(); err != nil {
+		t.Fatalf("Save 返回错误: %v", err)
+	}
+
+	reloadedJar, err := NewPersistentJar(path)
+	if err != nil {
+		t.Fatalf("重新创建 Cookie Jar 返回错误: %v", err)
+	}
+
+	if cookies := reloadedJar.Cookies(targetURL); len(cookies) != 0 {
+		t.Fatalf("Clear 后不应恢复任何 Cookie: %#v", cookies)
+	}
+}

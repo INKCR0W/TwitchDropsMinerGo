@@ -6,6 +6,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,6 +127,49 @@ func (j *PersistentJar) Cookies(u *url.URL) []*http.Cookie {
 	return j.jar.Cookies(u)
 }
 
+func (j *PersistentJar) Clear() error {
+	if j == nil {
+		return nil
+	}
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	j.stored = make(map[string]map[cookieKey]persistedCookie)
+	return j.rebuildLocked()
+}
+
+func (j *PersistentJar) ClearDomain(domain string) error {
+	if j == nil {
+		return nil
+	}
+
+	domain = canonicalCookieDomain(domain)
+	if domain == "" {
+		return nil
+	}
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	for rawURL, cookiesByKey := range j.stored {
+		rawHost := ""
+		if parsedURL, err := url.Parse(rawURL); err == nil {
+			rawHost = canonicalCookieDomain(parsedURL.Hostname())
+		}
+		for key := range cookiesByKey {
+			if domainMatches(canonicalCookieDomain(key.Domain), domain) || domainMatches(rawHost, domain) {
+				delete(cookiesByKey, key)
+			}
+		}
+		if len(cookiesByKey) == 0 {
+			delete(j.stored, rawURL)
+		}
+	}
+
+	return j.rebuildLocked()
+}
+
 func (j *PersistentJar) Load() error {
 	if j == nil || j.path == "" {
 		return nil
@@ -194,10 +238,9 @@ func (j *PersistentJar) Load() error {
 		}
 
 		j.stored[canonicalCookieURL(parsedURL)] = perURL
-		j.jar.SetCookies(parsedURL, httpCookies)
 	}
 
-	return nil
+	return j.rebuildLocked()
 }
 
 func (j *PersistentJar) Save() error {
@@ -271,6 +314,61 @@ func shouldDeleteCookie(cookie *http.Cookie, now time.Time) bool {
 		return true
 	}
 	return false
+}
+
+func canonicalCookieDomain(domain string) string {
+	domain = strings.TrimSpace(domain)
+	domain = strings.TrimPrefix(domain, ".")
+	return strings.ToLower(domain)
+}
+
+func domainMatches(host string, domain string) bool {
+	if host == "" || domain == "" {
+		return false
+	}
+	if host == domain {
+		return true
+	}
+
+	return strings.HasSuffix(host, "."+domain)
+}
+
+func (j *PersistentJar) rebuildLocked() error {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return fmt.Errorf("重建 Cookie Jar 失败: %w", err)
+	}
+
+	for rawURL, cookiesByKey := range j.stored {
+		if len(cookiesByKey) == 0 {
+			continue
+		}
+
+		parsedURL, parseErr := url.Parse(rawURL)
+		if parseErr != nil {
+			return fmt.Errorf("解析 Cookie 来源 URL %q 失败: %w", rawURL, parseErr)
+		}
+
+		httpCookies := make([]*http.Cookie, 0, len(cookiesByKey))
+		for _, persisted := range cookiesByKey {
+			httpCookies = append(httpCookies, &http.Cookie{
+				Name:     persisted.Name,
+				Value:    persisted.Value,
+				Path:     persisted.Path,
+				Domain:   persisted.Domain,
+				Expires:  persisted.Expires,
+				MaxAge:   persisted.MaxAge,
+				Secure:   persisted.Secure,
+				HttpOnly: persisted.HTTPOnly,
+				SameSite: http.SameSite(persisted.SameSite),
+			})
+		}
+
+		jar.SetCookies(parsedURL, httpCookies)
+	}
+
+	j.jar = jar
+	return nil
 }
 
 func cookiePathOrDefault(value string) string {
