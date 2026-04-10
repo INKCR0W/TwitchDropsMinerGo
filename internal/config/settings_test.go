@@ -1,0 +1,77 @@
+package config
+
+import (
+	"path/filepath"
+	"testing"
+
+	"twitchdropsminergo/internal/storage"
+)
+
+func TestLoadAppliesFileOverridesAndDefaults(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	input := map[string]any{
+		"language":           "简体中文",
+		"connection_quality": 3,
+		"priority":           []string{"A", "A", "B", ""},
+		"exclude":            []string{"X", "X", "  "},
+		"log": map[string]any{
+			"level":        "debug",
+			"format":       "json",
+			"file_enabled": false,
+		},
+	}
+
+	if err := storage.SaveJSONFile(path, input); err != nil {
+		t.Fatalf("写入测试配置失败: %v", err)
+	}
+
+	settings, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 返回错误: %v", err)
+	}
+
+	if settings.Language != "简体中文" {
+		t.Fatalf("Language 不匹配: %q", settings.Language)
+	}
+
+	if settings.ConnectionQuality != 3 {
+		t.Fatalf("ConnectionQuality 不匹配: %d", settings.ConnectionQuality)
+	}
+
+	if len(settings.Priority) != 2 || settings.Priority[0] != "A" || settings.Priority[1] != "B" {
+		t.Fatalf("Priority 未按预期去重: %#v", settings.Priority)
+	}
+
+	if len(settings.Exclude) != 1 || settings.Exclude[0] != "X" {
+		t.Fatalf("Exclude 未按预期去重: %#v", settings.Exclude)
+	}
+
+	if settings.PriorityMode != PriorityOnly {
+		t.Fatalf("PriorityMode 默认值错误: %q", settings.PriorityMode)
+	}
+
+	if !settings.TrayNotifications {
+		t.Fatal("TrayNotifications 默认值应为 true")
+	}
+
+	if settings.Log.Level != "debug" || settings.Log.Format != "json" || settings.Log.FileEnabled {
+		t.Fatalf("Log 配置不匹配: %#v", settings.Log)
+	}
+}
+
+func TestLoadRejectsInvalidConnectionQuality(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := storage.SaveJSONFile(path, map[string]any{
+		"connection_quality": 0,
+	}); err != nil {
+		t.Fatalf("写入测试配置失败: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("期望非法 connection_quality 返回错误")
+	}
+}

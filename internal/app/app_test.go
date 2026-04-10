@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -11,7 +12,14 @@ import (
 func TestRunWaitsForCancellation(t *testing.T) {
 	t.Parallel()
 
-	application := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	store := &memoryStateStore{}
+	application, err := New(Options{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		StateStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -36,13 +44,121 @@ func TestRunWaitsForCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Run 在取消后未及时退出")
 	}
+
+	if len(store.savedStates) != 2 {
+		t.Fatalf("期望保存 2 次状态，实际为 %d", len(store.savedStates))
+	}
 }
 
 func TestRunRejectsNilContext(t *testing.T) {
 	t.Parallel()
 
-	application := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	application, err := New(Options{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
 	if err := application.Run(nil); err == nil {
 		t.Fatal("期望 nil context 返回错误")
 	}
+}
+
+func TestRunPersistsLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 4, 11, 1, 0, 0, 0, time.UTC)
+	stop := start.Add(2 * time.Minute)
+	nowValues := []time.Time{start, stop}
+	store := &memoryStateStore{
+		state: RuntimeState{
+			SchemaVersion: 1,
+			RunCount:      4,
+		},
+	}
+
+	application, err := New(Options{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		StateStore: store,
+		Now: func() time.Time {
+			value := nowValues[0]
+			nowValues = nowValues[1:]
+			return value
+		},
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- application.Run(ctx)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case runErr := <-errCh:
+		if runErr != nil {
+			t.Fatalf("Run 返回错误: %v", runErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run 在取消后未及时退出")
+	}
+
+	if store.state.RunCount != 5 {
+		t.Fatalf("期望 run_count 为 5，实际为 %d", store.state.RunCount)
+	}
+
+	if !store.state.LastStartedAt.Equal(start) {
+		t.Fatalf("LastStartedAt 不匹配: %v", store.state.LastStartedAt)
+	}
+
+	if !store.state.LastStoppedAt.Equal(stop) {
+		t.Fatalf("LastStoppedAt 不匹配: %v", store.state.LastStoppedAt)
+	}
+}
+
+func TestNewFailsWhenStateLoadFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Options{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		StateStore: &memoryStateStore{loadErr: errors.New("boom")},
+	})
+	if err == nil {
+		t.Fatal("期望状态装载失败时返回错误")
+	}
+}
+
+type memoryStateStore struct {
+	state       RuntimeState
+	loadErr     error
+	saveErr     error
+	savedStates []RuntimeState
+}
+
+func (m *memoryStateStore) Load() (RuntimeState, error) {
+	if m.loadErr != nil {
+		return RuntimeState{}, m.loadErr
+	}
+
+	if m.state.SchemaVersion == 0 {
+		m.state.SchemaVersion = 1
+	}
+
+	return m.state, nil
+}
+
+func (m *memoryStateStore) Save(state RuntimeState) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+
+	m.state = state
+	m.savedStates = append(m.savedStates, state)
+	return nil
 }
