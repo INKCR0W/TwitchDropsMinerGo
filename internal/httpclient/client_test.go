@@ -1,0 +1,160 @@
+package httpclient
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"twitchdropsminergo/internal/config"
+)
+
+func TestNewClampsConnectionQuality(t *testing.T) {
+	t.Parallel()
+
+	client, err := New(Options{
+		Settings: config.Settings{
+			ConnectionQuality: 9,
+		},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	if client.ConnectTimeout() != 30*time.Second {
+		t.Fatalf("ConnectTimeout 不匹配: %v", client.ConnectTimeout())
+	}
+	if client.RequestTimeout() != 60*time.Second {
+		t.Fatalf("RequestTimeout 不匹配: %v", client.RequestTimeout())
+	}
+}
+
+func TestClientRetriesServerErrors(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := attempts.Add(1)
+		if current <= 2 {
+			http.Error(w, "retry", http.StatusBadGateway)
+			return
+		}
+
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+
+	var sleeps []time.Duration
+	client, err := New(Options{
+		Settings:    config.Settings{ConnectionQuality: 1},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+		Backoff: BackoffConfig{
+			Base:     2,
+			Variance: 0,
+			Maximum:  time.Minute,
+		},
+		Sleep: func(ctx context.Context, delay time.Duration) error {
+			sleeps = append(sleeps, delay)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	response, err := client.Do(context.Background(), Request{
+		Method: http.MethodGet,
+		URL:    server.URL,
+	})
+	if err != nil {
+		t.Fatalf("Do 返回错误: %v", err)
+	}
+
+	if response.StatusCode != http.StatusOK || response.Text() != "ok" {
+		t.Fatalf("响应不匹配: %+v", response)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("期望请求 3 次，实际为 %d", attempts.Load())
+	}
+	if len(sleeps) != 2 || sleeps[0] != time.Second || sleeps[1] != 2*time.Second {
+		t.Fatalf("退避序列不匹配: %#v", sleeps)
+	}
+}
+
+func TestClientUsesConfiguredProxy(t *testing.T) {
+	t.Parallel()
+
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		_, _ = io.WriteString(w, "direct")
+	}))
+	defer target.Close()
+
+	var proxyHits atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		_, _ = io.WriteString(w, "proxied")
+	}))
+	defer proxy.Close()
+
+	client, err := New(Options{
+		Settings: config.Settings{
+			ConnectionQuality: 1,
+			Proxy:             proxy.URL,
+		},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	response, err := client.Do(context.Background(), Request{
+		Method: http.MethodGet,
+		URL:    target.URL,
+	})
+	if err != nil {
+		t.Fatalf("Do 返回错误: %v", err)
+	}
+
+	if response.Text() != "proxied" {
+		t.Fatalf("期望命中代理响应，实际为 %q", response.Text())
+	}
+	if proxyHits.Load() == 0 {
+		t.Fatal("期望代理收到请求")
+	}
+	if targetHits.Load() != 0 {
+		t.Fatalf("目标服务不应直接收到请求，实际为 %d", targetHits.Load())
+	}
+}
+
+func TestClientInvalidatesExpiredRequest(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 11, 3, 0, 0, 0, time.UTC)
+	client, err := New(Options{
+		Settings:    config.Settings{ConnectionQuality: 1},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+		Clock: func() time.Time {
+			return now
+		},
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	_, err = client.Do(context.Background(), Request{
+		Method:          http.MethodGet,
+		URL:             "https://example.com",
+		InvalidateAfter: now.Add(9 * time.Second),
+	})
+	if !errors.Is(err, ErrRequestInvalid) {
+		t.Fatalf("期望返回 ErrRequestInvalid，实际为 %v", err)
+	}
+}
