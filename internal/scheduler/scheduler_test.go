@@ -271,6 +271,42 @@ func TestHandleInventoryFetchAddsUserTopics(t *testing.T) {
 	}
 }
 
+func TestHandleGamesUpdateContinuesAfterClaimSweepTimeout(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Timeout Game"}
+	campaign := mustCampaign(t, campaignSpec(now, "campaign-timeout", game, now.Add(-time.Hour), now.Add(2*time.Hour), nil))
+	drop := campaign.Drop("campaign-timeout-drop")
+	if drop == nil {
+		t.Fatal("期望测试 campaign 包含 drop")
+	}
+	drop.UpdateClaim(drop.GenerateClaimID(42))
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		authState:         &fakeAuthState{snapshot: auth.Snapshot{UserID: 42}},
+		claimSweepTimeout: 5 * time.Millisecond,
+		gqlClient: &fakeGQLClient{
+			doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
+				if operation.OperationName != "DropsPage_ClaimDropRewards" {
+					return gql.Response{}, nil
+				}
+				<-ctx.Done()
+				return gql.Response{}, ctx.Err()
+			},
+		},
+	})
+	scheduler.state = StateGamesUpdate
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+
+	if err := scheduler.handleGamesUpdate(context.Background()); err != nil {
+		t.Fatalf("handleGamesUpdate 返回错误: %v", err)
+	}
+	if scheduler.State() != StateChannelsCleanup {
+		t.Fatalf("认领超时后仍应进入 CHANNELS_CLEANUP: %s", scheduler.State())
+	}
+}
+
 func TestHandleChannelSwitchHonorsSelectionAndPriority(t *testing.T) {
 	t.Parallel()
 
@@ -856,6 +892,7 @@ type testSchedulerOptions struct {
 	watchInterval     time.Duration
 	progressDelay     time.Duration
 	maintenanceReload time.Duration
+	claimSweepTimeout time.Duration
 }
 
 func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
@@ -903,6 +940,7 @@ func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
 		WatchInterval:     options.watchInterval,
 		ProgressDelay:     options.progressDelay,
 		MaintenanceReload: options.maintenanceReload,
+		ClaimSweepTimeout: options.claimSweepTimeout,
 	})
 	if err != nil {
 		t.Fatalf("New 返回错误: %v", err)

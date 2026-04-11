@@ -27,6 +27,7 @@ const (
 	DefaultWatchInterval     = 59 * time.Second
 	DefaultProgressDelay     = 20 * time.Second
 	DefaultMaintenanceReload = time.Hour
+	DefaultClaimSweepTimeout = 30 * time.Second
 	defaultDirectoryLimit    = 20
 )
 
@@ -94,6 +95,7 @@ type Options struct {
 	MaintenanceReload time.Duration
 	DirectoryLimit    int
 	MaxChannels       int
+	ClaimSweepTimeout time.Duration
 }
 
 type StatusSnapshot struct {
@@ -126,6 +128,7 @@ type Scheduler struct {
 	maintenanceReload time.Duration
 	directoryLimit    int
 	maxChannels       int
+	claimSweepTimeout time.Duration
 
 	mu                sync.RWMutex
 	state             State
@@ -174,6 +177,13 @@ type claimCandidate struct {
 	CampaignID string
 	DropID     string
 	ClaimID    string
+}
+
+type claimSweepResult struct {
+	Total    int
+	Claimed  int
+	Failed   int
+	TimedOut bool
 }
 
 type pubsubStatusProvider interface {
@@ -237,6 +247,11 @@ func New(options Options) (*Scheduler, error) {
 		maxChannels = pubsub.MaxChannels
 	}
 
+	claimSweepTimeout := options.ClaimSweepTimeout
+	if claimSweepTimeout <= 0 {
+		claimSweepTimeout = DefaultClaimSweepTimeout
+	}
+
 	settings := options.Settings.Clone()
 	if settings.IsZero() {
 		settings = config.DefaultSettings()
@@ -257,6 +272,7 @@ func New(options Options) (*Scheduler, error) {
 		maintenanceReload: maintenanceReload,
 		directoryLimit:    directoryLimit,
 		maxChannels:       maxChannels,
+		claimSweepTimeout: claimSweepTimeout,
 		state:             StateIdle,
 		channels:          make(map[int64]domain.Channel),
 		stateChanged:      make(chan struct{}, 1),
@@ -564,12 +580,26 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 
 func (s *Scheduler) handleGamesUpdate(ctx context.Context) error {
 	now := s.nowUTC()
-	s.claimReadyDrops(ctx, now)
+	ready := s.readyDrops(now)
+	s.logger.Info("开始处理游戏筛选阶段", "ready_drop_count", len(ready), "claim_timeout", s.claimSweepTimeout.String())
 
+	claimCtx, cancel := context.WithTimeout(ctx, s.claimSweepTimeout)
+	claimResult := s.claimReadyDrops(claimCtx, ready)
+	cancel()
+	s.logger.Info(
+		"待认领掉宝处理完成",
+		"ready_drop_count", claimResult.Total,
+		"claimed_count", claimResult.Claimed,
+		"failed_count", claimResult.Failed,
+		"timed_out", claimResult.TimedOut,
+	)
+
+	wantedGames := s.computeWantedGames(now)
 	s.mu.Lock()
-	s.wantedGames = s.computeWantedGames(now)
+	s.wantedGames = wantedGames
 	s.fullCleanup = true
 	s.mu.Unlock()
+	s.logger.Info("游戏筛选完成", "wanted_game_count", len(wantedGames))
 
 	s.restartWatching()
 	s.ChangeState(StateChannelsCleanup)
@@ -885,18 +915,32 @@ func (s *Scheduler) onChannelChange(before, after domain.Channel) {
 	}
 }
 
-func (s *Scheduler) claimReadyDrops(ctx context.Context, now time.Time) {
-	for _, candidate := range s.readyDrops(now) {
+func (s *Scheduler) claimReadyDrops(ctx context.Context, candidates []claimCandidate) claimSweepResult {
+	result := claimSweepResult{Total: len(candidates)}
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			result.TimedOut = true
+			return result
+		}
+
 		ok, err := s.claimDropRequest(ctx, candidate.ClaimID)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				result.TimedOut = true
+				return result
+			}
+			result.Failed++
 			s.logger.Warn("认领掉宝失败", "campaign_id", candidate.CampaignID, "drop_id", candidate.DropID, "error", err)
 			continue
 		}
 		if ok {
+			result.Claimed++
 			s.markDropClaimed(candidate.DropID)
 			s.logger.Info("认领掉宝成功", "campaign_id", candidate.CampaignID, "drop_id", candidate.DropID)
 		}
 	}
+
+	return result
 }
 
 func (s *Scheduler) claimDropRequest(ctx context.Context, claimID string) (bool, error) {
