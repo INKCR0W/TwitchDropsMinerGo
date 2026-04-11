@@ -134,6 +134,7 @@ type shard struct {
 	conn      Connection
 	cancel    context.CancelFunc
 	done      chan struct{}
+	wake      chan struct{}
 	started   bool
 }
 
@@ -157,6 +158,12 @@ type inboundEnvelope struct {
 type inboundMessage struct {
 	Topic   string `json:"topic"`
 	Message string `json:"message"`
+}
+
+type readResult struct {
+	messageType int
+	payload     []byte
+	err         error
 }
 
 type gorillaDialer struct {
@@ -437,6 +444,7 @@ func (m *Manager) AddTopics(topics ...Topic) error {
 			state:     ShardStateDisconnected,
 			topics:    make(map[string]Topic),
 			submitted: make(map[string]Topic),
+			wake:      make(chan struct{}, 1),
 		}
 		if !shard.addTopic(topic, m.shardTopicLimit) {
 			m.mu.Unlock()
@@ -697,8 +705,15 @@ func (s *shard) finishRun() {
 }
 
 func (s *shard) handleConnection(ctx context.Context, conn Connection) error {
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+
+	results := make(chan readResult, 1)
+	go s.readLoop(readCtx, conn, results)
+
 	nextPing := s.manager.now()
 	pongDeadline := time.Time{}
+	wake := s.wakeChan()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -720,18 +735,36 @@ func (s *shard) handleConnection(ctx context.Context, conn Connection) error {
 			return err
 		}
 
-		pongReceived, reconnect, err := s.receiveOnce(ctx, conn)
-		if err != nil {
-			if isTimeoutError(err) {
-				continue
+		timer := time.NewTimer(s.nextWaitDelay(nextPing, pongDeadline))
+		select {
+		case <-ctx.Done():
+			stopTimer(timer)
+			return ctx.Err()
+		case <-wake:
+			stopTimer(timer)
+		case result, ok := <-results:
+			stopTimer(timer)
+			if !ok {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return fmt.Errorf("PubSub 读循环意外结束")
 			}
-			return err
-		}
-		if pongReceived {
-			pongDeadline = time.Time{}
-		}
-		if reconnect {
-			return fmt.Errorf("服务器请求重连")
+			if result.err != nil {
+				return result.err
+			}
+
+			pongReceived, reconnect, err := s.handleInbound(ctx, result.messageType, result.payload)
+			if err != nil {
+				return err
+			}
+			if pongReceived {
+				pongDeadline = time.Time{}
+			}
+			if reconnect {
+				return fmt.Errorf("服务器请求重连")
+			}
+		case <-timer.C:
 		}
 	}
 }
@@ -808,15 +841,23 @@ func (s *shard) syncTopics(ctx context.Context, conn Connection) error {
 	return nil
 }
 
-func (s *shard) receiveOnce(ctx context.Context, conn Connection) (pongReceived bool, reconnect bool, err error) {
-	if err := conn.SetReadDeadline(s.manager.now().Add(s.manager.readTimeout)); err != nil {
-		return false, false, err
-	}
+func (s *shard) readLoop(ctx context.Context, conn Connection, results chan<- readResult) {
+	defer close(results)
 
-	messageType, payload, err := conn.ReadMessage()
-	if err != nil {
-		return false, false, err
+	for {
+		messageType, payload, err := conn.ReadMessage()
+		select {
+		case results <- readResult{messageType: messageType, payload: payload, err: err}:
+		case <-ctx.Done():
+			return
+		}
+		if err != nil {
+			return
+		}
 	}
+}
+
+func (s *shard) handleInbound(ctx context.Context, messageType int, payload []byte) (pongReceived bool, reconnect bool, err error) {
 	if messageType != textMessageType {
 		return false, false, nil
 	}
@@ -924,8 +965,9 @@ func (s *shard) topicCount() int {
 }
 
 func (s *shard) addTopic(topic Topic, limit int) bool {
+	var wake chan struct{}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.topics == nil {
 		s.topics = make(map[string]Topic)
@@ -933,23 +975,46 @@ func (s *shard) addTopic(topic Topic, limit int) bool {
 	if s.submitted == nil {
 		s.submitted = make(map[string]Topic)
 	}
+	if s.wake == nil {
+		s.wake = make(chan struct{}, 1)
+	}
 	if len(s.topics) >= limit {
+		s.mu.Unlock()
 		return false
 	}
 	s.topics[topic.Key()] = topic
+	wake = s.wake
+	s.mu.Unlock()
+
+	s.signalWake(wake)
 	return true
 }
 
 func (s *shard) removeTopics(keys []string) {
+	var wake chan struct{}
+	var changed bool
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if len(s.topics) == 0 {
+		s.mu.Unlock()
 		return
 	}
+	if s.wake == nil {
+		s.wake = make(chan struct{}, 1)
+	}
 	for _, key := range keys {
+		if _, exists := s.topics[key]; exists {
+			changed = true
+		}
 		delete(s.topics, key)
 	}
+	if changed {
+		wake = s.wake
+	}
+	s.mu.Unlock()
+
+	s.signalWake(wake)
 }
 
 func (s *shard) clearAndDrainTopics() []Topic {
@@ -1039,6 +1104,49 @@ func (s *shard) markSubmitted(keys []string, current map[string]Topic) {
 		}
 		s.submitted[key] = topic
 	}
+}
+
+func (s *shard) wakeChan() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.wake == nil {
+		s.wake = make(chan struct{}, 1)
+	}
+
+	return s.wake
+}
+
+func (s *shard) signalWake(wake chan struct{}) {
+	if wake == nil {
+		return
+	}
+
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *shard) nextWaitDelay(nextPing time.Time, pongDeadline time.Time) time.Duration {
+	wait := s.manager.readTimeout
+	if wait <= 0 {
+		wait = time.Second
+	}
+
+	now := s.manager.now()
+	if untilPing := nextPing.Sub(now); untilPing < wait {
+		wait = untilPing
+	}
+	if !pongDeadline.IsZero() {
+		if untilPong := pongDeadline.Sub(now); untilPong < wait {
+			wait = untilPong
+		}
+	}
+	if wait < 0 {
+		return 0
+	}
+	return wait
 }
 
 func (m *Manager) buildHeaders(ctx context.Context) (http.Header, error) {
@@ -1155,20 +1263,25 @@ func isTimeoutError(err error) bool {
 
 func sleepContext(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
-	defer func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}()
+	defer stopTimer(timer)
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
 		return nil
+	}
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
 	}
 }
 

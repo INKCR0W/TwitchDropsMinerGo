@@ -197,6 +197,36 @@ func TestManagerReconnectsAfterPingTimeoutAndResubscribes(t *testing.T) {
 	}
 }
 
+func TestHandleConnectionStopsAfterReadFailure(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, Options{
+		Auth: &stubAuthState{
+			snapshot: auth.Snapshot{AccessToken: "token-timeout"},
+		},
+		PingInterval: time.Hour,
+		PingTimeout:  time.Hour,
+		ReadTimeout:  10 * time.Millisecond,
+	})
+
+	shard := &shard{
+		manager:   manager,
+		topics:    make(map[string]Topic),
+		submitted: make(map[string]Topic),
+		wake:      make(chan struct{}, 1),
+	}
+	conn := &errorOnceConn{err: fakeTimeoutError{}}
+
+	err := shard.handleConnection(context.Background(), conn)
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("期望返回超时错误，实际为 %v", err)
+	}
+	if got := conn.reads.Load(); got != 1 {
+		t.Fatalf("读失败后不应再次读取同一连接，实际读取次数为 %d", got)
+	}
+}
+
 func TestManagerDispatchesIncomingMessage(t *testing.T) {
 	t.Parallel()
 
@@ -396,6 +426,32 @@ type fakeInbound struct {
 	err         error
 }
 
+type errorOnceConn struct {
+	err   error
+	reads atomic.Int32
+}
+
+func (c *errorOnceConn) ReadMessage() (int, []byte, error) {
+	c.reads.Add(1)
+	return 0, nil, c.err
+}
+
+func (c *errorOnceConn) WriteJSON(any) error {
+	return nil
+}
+
+func (c *errorOnceConn) Close() error {
+	return nil
+}
+
+func (c *errorOnceConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (c *errorOnceConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
 func newFakeConn() *fakeConn {
 	return &fakeConn{
 		incoming: make(chan fakeInbound, 32),
@@ -571,16 +627,4 @@ func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
 	}
 
 	t.Fatalf("在 %s 内条件未满足", timeout)
-}
-
-func stopTimer(timer *time.Timer) {
-	if timer == nil {
-		return
-	}
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
 }
