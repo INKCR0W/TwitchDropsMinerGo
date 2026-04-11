@@ -1881,7 +1881,7 @@ func (s *Scheduler) logWantedGamesUpdate(previous []domain.Game, current []domai
 	s.logger.Info(
 		"规划挂游戏列表已更新",
 		"wanted_game_count", len(current),
-		"wanted_games", gameNames(current),
+		"wanted_games", formatGameNames(current),
 	)
 	for _, game := range previous {
 		if gameInList(game, current) {
@@ -1910,16 +1910,16 @@ func watchingLogAttrs(channel domain.Channel) []any {
 	return attrs
 }
 
-func gameNames(games []domain.Game) []string {
+func formatGameNames(games []domain.Game) string {
 	if len(games) == 0 {
-		return []string{}
+		return ""
 	}
 
 	names := make([]string, 0, len(games))
 	for _, game := range games {
 		names = append(names, gameName(game))
 	}
-	return names
+	return strings.Join(names, ", ")
 }
 
 func gameName(game domain.Game) string {

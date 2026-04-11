@@ -358,7 +358,7 @@ func TestLogWantedGamesUpdateReportsCurrentAndRemovedGames(t *testing.T) {
 	if !strings.Contains(output, "规划挂游戏列表已更新") {
 		t.Fatalf("缺少规划游戏列表日志: %q", output)
 	}
-	if !strings.Contains(output, "wanted_games=\"[Apex Legends]\"") {
+	if !strings.Contains(output, "wanted_games=\"Apex Legends\"") {
 		t.Fatalf("规划游戏列表日志不匹配: %q", output)
 	}
 	if !strings.Contains(output, "游戏已移出规划列表") || !strings.Contains(output, "game=Rust") {
