@@ -5,8 +5,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,40 +25,45 @@ func TestParseArgsAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseArgs 返回错误: %v", err)
 	}
-	if options.RuntimeDir == "" || options.ListenAddr != defaultListenAddr {
+	if options.RuntimeDir == "" {
 		t.Fatalf("默认参数不匹配: %#v", options)
 	}
 }
 
-func TestValidateHotUpdatableSettingsRejectsTransportChanges(t *testing.T) {
+func TestBuildRuntimeObservationMapsSnapshots(t *testing.T) {
 	t.Parallel()
 
-	current := config.DefaultSettings()
-	next := current.Clone()
-	next.Proxy = "http://proxy.example.com:8080"
-
-	if err := validateHotUpdatableSettings(current, next); err == nil {
-		t.Fatal("Proxy 变更应被拒绝")
-	}
-}
-
-func TestBuildStatusResponseMapsSnapshots(t *testing.T) {
-	t.Parallel()
-
-	application, err := app.New(app.Options{
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	if err != nil {
-		t.Fatalf("app.New 返回错误: %v", err)
-	}
-
+	now := time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC)
 	settings := config.DefaultSettings()
 	settings.Language = "简体中文"
-	if err := application.UpdateSettings(settings); err != nil {
-		t.Fatalf("UpdateSettings 返回错误: %v", err)
+	settings.Proxy = "http://user:pass@proxy.example.com:8080"
+
+	campaign, err := domain.NewCampaign(domain.CampaignSpec{
+		ID:       "campaign-1",
+		Name:     "Campaign",
+		Game:     domain.Game{ID: 1, Name: "Game", SlugText: "game"},
+		Linked:   true,
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(2 * time.Hour),
+		Status:   "ACTIVE",
+		Drops: []domain.TimedDropSpec{
+			{
+				ID:                 "drop-1",
+				Name:               "Drop",
+				Benefits:           []domain.Benefit{{ID: "benefit-1", Name: "Reward", Type: domain.BenefitTypeDirectEntitlement}},
+				StartsAt:           now.Add(-time.Hour),
+				EndsAt:             now.Add(time.Hour),
+				ClaimID:            "claim-1",
+				RealCurrentMinutes: 10,
+				RequiredMinutes:    30,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCampaign 返回错误: %v", err)
 	}
 
-	response := buildStatusResponse(application, auth.Snapshot{UserID: 42}, scheduler.StatusSnapshot{
+	observation := buildRuntimeObservation(settings, auth.Snapshot{UserID: 42}, scheduler.StatusSnapshot{
 		State:             scheduler.StateChannelSwitch,
 		WantedGames:       []domain.Game{{ID: 1, Name: "Game", SlugText: "game"}},
 		WatchingChannelID: 9,
@@ -90,82 +95,104 @@ func TestBuildStatusResponseMapsSnapshots(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, campaign, now)
 
-	if !response.Auth.LoggedIn || response.Auth.UserID != 42 {
-		t.Fatalf("认证状态映射错误: %#v", response.Auth)
+	if !observation.Auth.LoggedIn || observation.Auth.UserID != 42 {
+		t.Fatalf("认证状态映射错误: %#v", observation.Auth)
 	}
-	if response.Schedule.State != string(scheduler.StateChannelSwitch) {
-		t.Fatalf("调度状态映射错误: %#v", response.Schedule)
+	if observation.Schedule.State != string(scheduler.StateChannelSwitch) {
+		t.Fatalf("调度状态映射错误: %#v", observation.Schedule)
 	}
-	if response.Schedule.ChannelCount != 1 || response.Schedule.Channels[0].Login != "watching" {
-		t.Fatalf("频道状态映射错误: %#v", response.Schedule.Channels)
+	if observation.Schedule.ChannelCount != 1 || observation.Schedule.Channels[0].Login != "watching" {
+		t.Fatalf("频道状态映射错误: %#v", observation.Schedule.Channels)
 	}
-	if response.Schedule.PubSub.TopicCount != 2 || !response.Schedule.PubSub.Running {
-		t.Fatalf("PubSub 状态映射错误: %#v", response.Schedule.PubSub)
+	if observation.Schedule.PubSub.TopicCount != 2 || !observation.Schedule.PubSub.Running {
+		t.Fatalf("PubSub 状态映射错误: %#v", observation.Schedule.PubSub)
 	}
-	if response.Settings.Language != "简体中文" {
-		t.Fatalf("设置映射错误: %#v", response.Settings)
+	if observation.Schedule.ActiveCampaign == nil || observation.Schedule.ActiveCampaign.ID != "campaign-1" {
+		t.Fatalf("活动快照映射错误: %#v", observation.Schedule.ActiveCampaign)
+	}
+	if observation.Schedule.ActiveDrop == nil || observation.Schedule.ActiveDrop.ID != "drop-1" || !observation.Schedule.ActiveDrop.Claimable {
+		t.Fatalf("掉宝快照映射错误: %#v", observation.Schedule.ActiveDrop)
+	}
+	if observation.Settings.Proxy != "http://proxy.example.com:8080" {
+		t.Fatalf("设置应已脱敏: %#v", observation.Settings)
 	}
 }
 
-func TestApplyRuntimeSettingsRollsBackWhenUpdaterFails(t *testing.T) {
+func TestLocalStateSyncPersistsObservation(t *testing.T) {
 	t.Parallel()
 
-	current := config.DefaultSettings()
-	next := current.Clone()
-	next.Language = "简体中文"
-
-	application := &stubRuntimeSettingsController{
-		current: current,
+	now := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	settings := config.DefaultSettings()
+	settings.Language = "简体中文"
+	settings.Proxy = "http://user:pass@proxy.example.com:8080"
+	target := &stubLocalStateTarget{
+		settings: settings,
 	}
-	updater := &stubSettingsUpdater{
-		err: errors.New("scheduler update failed"),
-	}
-
-	_, err := applyRuntimeSettings(application, updater, next, testLogger())
-	if err == nil || !strings.Contains(err.Error(), "scheduler update failed") {
-		t.Fatalf("期望返回热更新错误，实际为 %v", err)
-	}
-	if got := application.Settings().Language; got != current.Language {
-		t.Fatalf("热更新失败后应回滚配置，实际 language=%q", got)
-	}
-	if len(application.saved) != 2 {
-		t.Fatalf("期望先保存新配置再回滚，实际保存次数为 %d", len(application.saved))
-	}
-}
-
-func TestApplyRuntimeSettingsSurfacesRollbackFailure(t *testing.T) {
-	t.Parallel()
-
-	current := config.DefaultSettings()
-	next := current.Clone()
-	next.Language = "简体中文"
-
-	application := &stubRuntimeSettingsController{
-		current:    current,
-		updateErrs: []error{nil, errors.New("rollback failed")},
-	}
-	updater := &stubSettingsUpdater{
-		err: errors.New("scheduler update failed"),
+	syncer := &localStateSync{
+		application: target,
+		auth:        stubAuthSnapshotProvider{snapshot: auth.Snapshot{UserID: 77}},
+		scheduler: stubSchedulerStateProvider{
+			snapshot: scheduler.StatusSnapshot{
+				State:    scheduler.StateIdle,
+				Channels: []domain.Channel{{ID: 9, Login: "watching"}},
+			},
+		},
+		interval: time.Hour,
+		now: func() time.Time {
+			return now
+		},
 	}
 
-	_, err := applyRuntimeSettings(application, updater, next, testLogger())
-	if err == nil {
-		t.Fatal("期望返回错误")
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- syncer.Run(ctx)
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		target.mu.Lock()
+		count := len(target.observations)
+		target.mu.Unlock()
+		if count > 0 {
+			break
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("本地状态同步未写入观察快照")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	if !strings.Contains(err.Error(), "scheduler update failed") || !strings.Contains(err.Error(), "rollback failed") {
-		t.Fatalf("错误应同时暴露热更新失败与回滚失败，实际为 %v", err)
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run 返回错误: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("本地状态同步在取消后未退出")
 	}
-	if got := application.Settings().Language; got != next.Language {
-		t.Fatalf("回滚失败后应保留失败前状态，实际 language=%q", got)
+
+	target.mu.Lock()
+	observation := target.observations[0]
+	target.mu.Unlock()
+
+	if observation.Auth.UserID != 77 {
+		t.Fatalf("认证快照未写入: %#v", observation.Auth)
+	}
+	if observation.Settings.Proxy != "http://proxy.example.com:8080" {
+		t.Fatalf("设置快照应已脱敏: %#v", observation.Settings)
 	}
 }
 
 func TestRunServiceStopsOnCancellation(t *testing.T) {
 	t.Parallel()
 
-	application := newTestApplication(t)
 	stopped := make(chan struct{})
 	service := stubRunner{
 		run: func(ctx context.Context) error {
@@ -182,7 +209,10 @@ func TestRunServiceStopsOnCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	if err := runServiceWithTimeout(ctx, cancel, application, service, newTestServer(), testLogger(), 200*time.Millisecond); err != nil {
+	if err := runServiceWithTimeout(ctx, cancel, 200*time.Millisecond,
+		namedRunner{name: "应用状态持久化", runner: stubRunner{}},
+		namedRunner{name: "调度服务", runner: service},
+	); err != nil {
 		t.Fatalf("runServiceWithTimeout 返回错误: %v", err)
 	}
 
@@ -196,7 +226,6 @@ func TestRunServiceStopsOnCancellation(t *testing.T) {
 func TestRunServiceReturnsFirstWorkerError(t *testing.T) {
 	t.Parallel()
 
-	application := newTestApplication(t)
 	service := stubRunner{
 		run: func(context.Context) error {
 			return errors.New("worker failed")
@@ -206,7 +235,10 @@ func TestRunServiceReturnsFirstWorkerError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := runServiceWithTimeout(ctx, cancel, application, service, newTestServer(), testLogger(), 200*time.Millisecond)
+	err := runServiceWithTimeout(ctx, cancel, 200*time.Millisecond,
+		namedRunner{name: "应用状态持久化", runner: stubRunner{}},
+		namedRunner{name: "调度服务", runner: service},
+	)
 	if err == nil || !strings.Contains(err.Error(), "worker failed") {
 		t.Fatalf("期望返回首个 worker 错误，实际为 %v", err)
 	}
@@ -215,7 +247,6 @@ func TestRunServiceReturnsFirstWorkerError(t *testing.T) {
 func TestRunServiceTimesOutWhenWorkerIgnoresCancellation(t *testing.T) {
 	t.Parallel()
 
-	application := newTestApplication(t)
 	release := make(chan struct{})
 	service := stubRunner{
 		run: func(ctx context.Context) error {
@@ -232,32 +263,13 @@ func TestRunServiceTimesOutWhenWorkerIgnoresCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	err := runServiceWithTimeout(ctx, cancel, application, service, newTestServer(), testLogger(), 50*time.Millisecond)
+	err := runServiceWithTimeout(ctx, cancel, 50*time.Millisecond,
+		namedRunner{name: "应用状态持久化", runner: stubRunner{}},
+		namedRunner{name: "调度服务", runner: service},
+	)
 	close(release)
 	if !errors.Is(err, errRuntimeShutdownTimeout) {
 		t.Fatalf("期望返回退出超时错误，实际为 %v", err)
-	}
-}
-
-func newTestApplication(t *testing.T) *app.App {
-	t.Helper()
-
-	application, err := app.New(app.Options{
-		Logger: testLogger(),
-	})
-	if err != nil {
-		t.Fatalf("app.New 返回错误: %v", err)
-	}
-	return application
-}
-
-func newTestServer() *http.Server {
-	return &http.Server{
-		Addr: "127.0.0.1:0",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		}),
-		ReadHeaderTimeout: time.Second,
 	}
 }
 
@@ -271,55 +283,57 @@ type stubRunner struct {
 
 func (s stubRunner) Run(ctx context.Context) error {
 	if s.run == nil {
+		<-ctx.Done()
 		return nil
 	}
 	return s.run(ctx)
 }
 
-type stubRuntimeSettingsController struct {
-	current    config.Settings
-	updateErrs []error
-	saved      []config.Settings
+type stubLocalStateTarget struct {
+	settings     config.Settings
+	mu           sync.Mutex
+	observations []app.Observation
 }
 
-func (s *stubRuntimeSettingsController) Settings() config.Settings {
+func (s *stubLocalStateTarget) Settings() config.Settings {
 	if s == nil {
 		return config.DefaultSettings()
 	}
-	if s.current.IsZero() {
-		s.current = config.DefaultSettings()
+	settings := s.settings.Clone()
+	if settings.IsZero() {
+		settings = config.DefaultSettings()
 	}
-	return s.current.Clone()
+	return settings
 }
 
-func (s *stubRuntimeSettingsController) UpdateSettings(settings config.Settings) error {
+func (s *stubLocalStateTarget) UpdateObservation(observation app.Observation) error {
 	if s == nil {
-		return errors.New("controller 未初始化")
+		return errors.New("状态目标未初始化")
 	}
 
-	if len(s.updateErrs) > 0 {
-		err := s.updateErrs[0]
-		s.updateErrs = s.updateErrs[1:]
-		if err != nil {
-			return err
-		}
-	}
-
-	s.current = settings.Clone()
-	s.saved = append(s.saved, settings.Clone())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observations = append(s.observations, observation)
 	return nil
 }
 
-type stubSettingsUpdater struct {
-	err      error
-	received []config.Settings
+type stubAuthSnapshotProvider struct {
+	snapshot auth.Snapshot
 }
 
-func (s *stubSettingsUpdater) UpdateSettings(settings config.Settings) error {
-	if s == nil {
-		return errors.New("updater 未初始化")
-	}
+func (s stubAuthSnapshotProvider) Snapshot() auth.Snapshot {
+	return s.snapshot
+}
 
-	s.received = append(s.received, settings.Clone())
-	return s.err
+type stubSchedulerStateProvider struct {
+	snapshot       scheduler.StatusSnapshot
+	activeCampaign *domain.DropsCampaign
+}
+
+func (s stubSchedulerStateProvider) StatusSnapshot() scheduler.StatusSnapshot {
+	return s.snapshot
+}
+
+func (s stubSchedulerStateProvider) ActiveCampaign(*domain.Channel) *domain.DropsCampaign {
+	return s.activeCampaign
 }

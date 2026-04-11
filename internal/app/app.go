@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
 	"twitchdropsminergo/internal/config"
 )
 
-const stateSchemaVersion = 1
+const stateSchemaVersion = 2
 
 type StateStore interface {
 	Load() (RuntimeState, error)
@@ -20,10 +22,17 @@ type StateStore interface {
 }
 
 type RuntimeState struct {
-	SchemaVersion int       `json:"schema_version"`
-	RunCount      int       `json:"run_count"`
-	LastStartedAt time.Time `json:"last_started_at,omitempty"`
-	LastStoppedAt time.Time `json:"last_stopped_at,omitempty"`
+	SchemaVersion int             `json:"schema_version"`
+	RunCount      int             `json:"run_count"`
+	Running       bool            `json:"running"`
+	Healthy       bool            `json:"healthy"`
+	LastError     string          `json:"last_error,omitempty"`
+	LastStartedAt time.Time       `json:"last_started_at,omitempty"`
+	LastStoppedAt time.Time       `json:"last_stopped_at,omitempty"`
+	UpdatedAt     time.Time       `json:"updated_at,omitempty"`
+	Auth          AuthStatus      `json:"auth"`
+	Schedule      ScheduleStatus  `json:"schedule"`
+	Settings      config.Settings `json:"settings"`
 }
 
 type Options struct {
@@ -38,6 +47,7 @@ type App struct {
 	stateStore StateStore
 	settings   config.Store
 	mu         sync.RWMutex
+	saveMu     sync.Mutex
 	state      RuntimeState
 	current    config.Settings
 	now        func() time.Time
@@ -46,6 +56,7 @@ type App struct {
 func DefaultRuntimeState() RuntimeState {
 	return RuntimeState{
 		SchemaVersion: stateSchemaVersion,
+		Settings:      config.DefaultSettings().Sanitized(),
 	}
 }
 
@@ -65,7 +76,7 @@ func New(options Options) (*App, error) {
 			return nil, fmt.Errorf("加载运行时状态失败: %w", err)
 		}
 
-		if loadedState.SchemaVersion == 0 {
+		if loadedState.SchemaVersion < stateSchemaVersion {
 			loadedState.SchemaVersion = stateSchemaVersion
 		}
 		state = loadedState
@@ -79,6 +90,7 @@ func New(options Options) (*App, error) {
 		}
 		settings = loadedSettings.Clone()
 	}
+	state.Settings = settings.Sanitized()
 
 	return &App{
 		logger:     options.Logger,
@@ -118,39 +130,35 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) markStarted() error {
-	if a.stateStore == nil {
-		return nil
-	}
-
 	a.mu.Lock()
+	stamp := a.now().UTC()
 	a.state.SchemaVersion = stateSchemaVersion
 	a.state.RunCount++
-	a.state.LastStartedAt = a.now().UTC()
-	state := a.state
+	a.state.Running = true
+	a.state.Healthy = true
+	a.state.LastError = ""
+	a.state.LastStartedAt = stamp
+	a.state.UpdatedAt = stamp
+	a.state.Settings = a.current.Sanitized()
+	state := a.state.clone()
 	a.mu.Unlock()
 
-	if err := a.stateStore.Save(state); err != nil {
-		return fmt.Errorf("保存启动状态失败: %w", err)
-	}
-
-	return nil
+	return a.saveState(state, "保存启动状态失败")
 }
 
 func (a *App) markStopped() error {
-	if a.stateStore == nil {
-		return nil
-	}
-
 	a.mu.Lock()
-	a.state.LastStoppedAt = a.now().UTC()
-	state := a.state
+	stamp := a.now().UTC()
+	a.state.Running = false
+	if strings.TrimSpace(a.state.LastError) == "" {
+		a.state.Healthy = true
+	}
+	a.state.LastStoppedAt = stamp
+	a.state.UpdatedAt = stamp
+	state := a.state.clone()
 	a.mu.Unlock()
 
-	if err := a.stateStore.Save(state); err != nil {
-		return fmt.Errorf("保存停止状态失败: %w", err)
-	}
-
-	return nil
+	return a.saveState(state, "保存停止状态失败")
 }
 
 func (a *App) RuntimeState() RuntimeState {
@@ -160,7 +168,7 @@ func (a *App) RuntimeState() RuntimeState {
 
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.state
+	return a.state.clone()
 }
 
 func (a *App) Settings() config.Settings {
@@ -188,8 +196,97 @@ func (a *App) UpdateSettings(settings config.Settings) error {
 		}
 	}
 
+	var (
+		stateToSave RuntimeState
+		shouldSave  bool
+	)
 	a.mu.Lock()
 	a.current = cloned
+	next := a.state.clone()
+	next.SchemaVersion = stateSchemaVersion
+	next.Settings = cloned.Sanitized()
+	if !runtimeStateEqual(a.state, next) {
+		next.UpdatedAt = a.now().UTC()
+		shouldSave = true
+	}
+	a.state = next
+	stateToSave = next.clone()
 	a.mu.Unlock()
+
+	if !shouldSave {
+		return nil
+	}
+	return a.saveState(stateToSave, "保存运行时配置快照失败")
+}
+
+func (a *App) UpdateObservation(observation Observation) error {
+	if a == nil {
+		return fmt.Errorf("应用未初始化")
+	}
+
+	normalized := observation.normalized(a.Settings())
+	var (
+		stateToSave RuntimeState
+		shouldSave  bool
+	)
+
+	a.mu.Lock()
+	next := a.state.clone()
+	next.SchemaVersion = stateSchemaVersion
+	next.Healthy = normalized.Healthy
+	next.LastError = strings.TrimSpace(normalized.LastError)
+	next.Auth = normalized.Auth
+	next.Schedule = normalized.Schedule
+	next.Settings = normalized.Settings
+	if !runtimeStateEqual(a.state, next) {
+		next.UpdatedAt = a.now().UTC()
+		shouldSave = true
+	}
+	a.state = next
+	stateToSave = next.clone()
+	a.mu.Unlock()
+
+	if !shouldSave {
+		return nil
+	}
+	return a.saveState(stateToSave, "保存运行时观察快照失败")
+}
+
+func (a *App) RecordFailure(err error) error {
+	if a == nil {
+		return fmt.Errorf("应用未初始化")
+	}
+	if err == nil {
+		return nil
+	}
+
+	a.mu.Lock()
+	a.state.SchemaVersion = stateSchemaVersion
+	a.state.Running = false
+	a.state.Healthy = false
+	a.state.LastError = strings.TrimSpace(err.Error())
+	a.state.UpdatedAt = a.now().UTC()
+	a.state.Settings = a.current.Sanitized()
+	state := a.state.clone()
+	a.mu.Unlock()
+
+	return a.saveState(state, "保存失败状态失败")
+}
+
+func (a *App) saveState(state RuntimeState, action string) error {
+	if a.stateStore == nil {
+		return nil
+	}
+	a.saveMu.Lock()
+	defer a.saveMu.Unlock()
+	if err := a.stateStore.Save(state); err != nil {
+		return fmt.Errorf("%s: %w", action, err)
+	}
 	return nil
+}
+
+func runtimeStateEqual(current RuntimeState, next RuntimeState) bool {
+	current.UpdatedAt = time.Time{}
+	next.UpdatedAt = time.Time{}
+	return reflect.DeepEqual(current, next)
 }
