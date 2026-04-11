@@ -594,11 +594,13 @@ func (s *Scheduler) handleGamesUpdate(ctx context.Context) error {
 		"timed_out", claimResult.TimedOut,
 	)
 
+	previousWantedGames := s.WantedGames()
 	wantedGames := s.computeWantedGames(now)
 	s.mu.Lock()
 	s.wantedGames = wantedGames
 	s.fullCleanup = true
 	s.mu.Unlock()
+	s.logWantedGamesUpdate(previousWantedGames, wantedGames)
 	s.logger.Info("游戏筛选完成", "wanted_game_count", len(wantedGames))
 
 	s.restartWatching()
@@ -1129,24 +1131,50 @@ func (s *Scheduler) shouldSwitch(channel domain.Channel) bool {
 }
 
 func (s *Scheduler) watch(channelID int64) {
+	var (
+		channel domain.Channel
+		ok      bool
+	)
+
 	s.mu.Lock()
 	changed := s.watchingChannelID != channelID
 	s.watchingChannelID = channelID
+	channel, ok = s.channels[channelID]
 	s.mu.Unlock()
 
 	if changed {
+		if ok {
+			s.logger.Info("切换观看频道", watchingLogAttrs(channel)...)
+		} else {
+			s.logger.Info("切换观看频道", "channel_id", channelID)
+		}
 		s.signalWatch()
 	}
 }
 
 func (s *Scheduler) stopWatching() {
+	var (
+		channel   domain.Channel
+		ok        bool
+		channelID int64
+	)
+
 	s.mu.Lock()
 	changed := s.watchingChannelID != 0 || !s.lastProgressAt.IsZero()
+	channelID = s.watchingChannelID
+	channel, ok = s.channels[channelID]
 	s.watchingChannelID = 0
 	s.lastProgressAt = time.Time{}
 	s.mu.Unlock()
 
 	if changed {
+		if channelID != 0 {
+			if ok {
+				s.logger.Info("停止观看频道", watchingLogAttrs(channel)...)
+			} else {
+				s.logger.Info("停止观看频道", "channel_id", channelID)
+			}
+		}
 		s.signalWatch()
 	}
 }
@@ -1843,6 +1871,68 @@ func gameKey(game domain.Game) string {
 		return strconv.FormatInt(game.ID, 10)
 	}
 	return strings.ToLower(strings.TrimSpace(game.Name))
+}
+
+func (s *Scheduler) logWantedGamesUpdate(previous []domain.Game, current []domain.Game) {
+	if s == nil {
+		return
+	}
+
+	s.logger.Info(
+		"规划挂游戏列表已更新",
+		"wanted_game_count", len(current),
+		"wanted_games", gameNames(current),
+	)
+	for _, game := range previous {
+		if gameInList(game, current) {
+			continue
+		}
+		s.logger.Info("游戏已移出规划列表", "game", gameName(game))
+	}
+}
+
+func watchingLogAttrs(channel domain.Channel) []any {
+	attrs := []any{
+		"channel_id", channel.ID,
+		"channel_login", channel.Login,
+		"channel_name", channel.DisplayName,
+		"acl_based", channel.ACLBased,
+	}
+	if channel.Stream != nil {
+		if channel.Stream.Game != nil {
+			attrs = append(attrs, "game", gameName(*channel.Stream.Game))
+		}
+		if channel.Stream.Viewers > 0 {
+			attrs = append(attrs, "viewers", channel.Stream.Viewers)
+		}
+		attrs = append(attrs, "drops_enabled", channel.Stream.DropsEnabled)
+	}
+	return attrs
+}
+
+func gameNames(games []domain.Game) []string {
+	if len(games) == 0 {
+		return []string{}
+	}
+
+	names := make([]string, 0, len(games))
+	for _, game := range games {
+		names = append(names, gameName(game))
+	}
+	return names
+}
+
+func gameName(game domain.Game) string {
+	if strings.TrimSpace(game.Name) != "" {
+		return game.Name
+	}
+	if slug := strings.TrimSpace(game.Slug()); slug != "" {
+		return slug
+	}
+	if game.ID > 0 {
+		return strconv.FormatInt(game.ID, 10)
+	}
+	return ""
 }
 
 func uniqueInt64s(values []int64) []int64 {

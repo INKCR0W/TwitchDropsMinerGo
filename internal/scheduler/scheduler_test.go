@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -304,6 +306,63 @@ func TestHandleGamesUpdateContinuesAfterClaimSweepTimeout(t *testing.T) {
 	}
 	if scheduler.State() != StateChannelsCleanup {
 		t.Fatalf("认领超时后仍应进入 CHANNELS_CLEANUP: %s", scheduler.State())
+	}
+}
+
+func TestWatchLogsChannelAndGameOnSwitch(t *testing.T) {
+	t.Parallel()
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	game := domain.Game{ID: 1, Name: "Rust"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{logger: logger})
+	scheduler.channels = map[int64]domain.Channel{
+		7: {
+			ID:          7,
+			Login:       "rustlive",
+			DisplayName: "Rust Live",
+			ACLBased:    true,
+			Stream: &domain.Stream{
+				Game:         &game,
+				Viewers:      321,
+				DropsEnabled: true,
+			},
+		},
+	}
+
+	scheduler.watch(7)
+
+	output := logs.String()
+	if !strings.Contains(output, "切换观看频道") {
+		t.Fatalf("缺少切台日志: %q", output)
+	}
+	if !strings.Contains(output, "channel_login=rustlive") || !strings.Contains(output, "game=Rust") {
+		t.Fatalf("切台日志缺少频道或游戏信息: %q", output)
+	}
+}
+
+func TestLogWantedGamesUpdateReportsCurrentAndRemovedGames(t *testing.T) {
+	t.Parallel()
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{logger: logger})
+	scheduler.logWantedGamesUpdate(
+		[]domain.Game{{ID: 1, Name: "Rust"}, {ID: 2, Name: "Apex Legends"}},
+		[]domain.Game{{ID: 2, Name: "Apex Legends"}},
+	)
+
+	output := logs.String()
+	if !strings.Contains(output, "规划挂游戏列表已更新") {
+		t.Fatalf("缺少规划游戏列表日志: %q", output)
+	}
+	if !strings.Contains(output, "wanted_games=\"[Apex Legends]\"") {
+		t.Fatalf("规划游戏列表日志不匹配: %q", output)
+	}
+	if !strings.Contains(output, "游戏已移出规划列表") || !strings.Contains(output, "game=Rust") {
+		t.Fatalf("缺少移出规划列表日志: %q", output)
 	}
 }
 
@@ -881,6 +940,7 @@ func TestUpdateSettingsReconfiguresTrackerAndRequestsReload(t *testing.T) {
 }
 
 type testSchedulerOptions struct {
+	logger            *slog.Logger
 	settings          config.Settings
 	refresher         InventoryRefresher
 	tracker           *fakeTracker
@@ -929,6 +989,7 @@ func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
 	}
 
 	scheduler, err := New(Options{
+		Logger:            options.logger,
 		Settings:          options.settings,
 		Refresher:         refresher,
 		Tracker:           tracker,
