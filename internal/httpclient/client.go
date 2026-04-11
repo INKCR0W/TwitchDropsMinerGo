@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -32,6 +33,7 @@ var AndroidAppClient = ClientInfo{
 }
 
 type Options struct {
+	Logger      *slog.Logger
 	Settings    config.Settings
 	CookiesPath string
 	ClientInfo  ClientInfo
@@ -41,6 +43,7 @@ type Options struct {
 }
 
 type Client struct {
+	logger         *slog.Logger
 	httpClient     *http.Client
 	jar            *PersistentJar
 	info           ClientInfo
@@ -78,6 +81,11 @@ func (r Response) Text() string {
 }
 
 func New(options Options) (*Client, error) {
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
 	now := options.Clock
 	if now == nil {
 		now = time.Now
@@ -134,6 +142,7 @@ func New(options Options) (*Client, error) {
 	}
 
 	return &Client{
+		logger:         logger,
 		httpClient:     httpClient,
 		jar:            jar,
 		info:           info,
@@ -183,7 +192,9 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 		return Response{}, err
 	}
 
+	attempt := 0
 	for {
+		attempt++
 		if c.shouldInvalidate(request.InvalidateAfter) {
 			return Response{}, ErrRequestInvalid
 		}
@@ -199,19 +210,33 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 			if !isRetryableRequestError(err) {
 				return Response{}, fmt.Errorf("请求失败: %w", err)
 			}
+			delay := backoff.Next()
+			c.logRetry(method, request.URL, attempt, delay, 0, err)
+			if err := c.sleep(ctx, delay); err != nil {
+				return Response{}, err
+			}
+			continue
 		} else {
 			response, readErr := readResponse(httpResponse)
 			if readErr == nil {
 				if response.StatusCode < 500 {
 					return response, nil
 				}
+				delay := backoff.Next()
+				c.logRetry(method, request.URL, attempt, delay, response.StatusCode, nil)
+				if err := c.sleep(ctx, delay); err != nil {
+					return Response{}, err
+				}
+				continue
 			} else if !isRetryableRequestError(readErr) {
 				return Response{}, fmt.Errorf("读取响应失败: %w", readErr)
 			}
-		}
-
-		if err := c.sleep(ctx, backoff.Next()); err != nil {
-			return Response{}, err
+			delay := backoff.Next()
+			c.logRetry(method, request.URL, attempt, delay, 0, readErr)
+			if err := c.sleep(ctx, delay); err != nil {
+				return Response{}, err
+			}
+			continue
 		}
 	}
 }
@@ -322,4 +347,41 @@ func readResponse(httpResponse *http.Response) (Response, error) {
 		Header:     httpResponse.Header.Clone(),
 		Body:       body,
 	}, nil
+}
+
+func (c *Client) logRetry(method string, rawURL string, attempt int, delay time.Duration, statusCode int, err error) {
+	if c == nil || c.logger == nil {
+		return
+	}
+
+	attrs := []any{
+		"method", method,
+		"url", sanitizeURL(rawURL),
+		"attempt", attempt,
+		"retry_in", delay.String(),
+	}
+	if statusCode > 0 {
+		attrs = append(attrs, "status_code", statusCode)
+	}
+	if err != nil {
+		attrs = append(attrs, "error", err)
+	}
+
+	c.logger.Warn("HTTP 请求失败，准备退避重试", attrs...)
+}
+
+func sanitizeURL(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return rawURL
+	}
+
+	sanitized := parsedURL.Scheme + "://" + parsedURL.Host + parsedURL.EscapedPath()
+	if sanitized == "" {
+		return rawURL
+	}
+	return sanitized
 }

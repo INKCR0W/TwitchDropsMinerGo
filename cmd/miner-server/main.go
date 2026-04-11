@@ -122,6 +122,7 @@ func run(args []string) int {
 
 	clientInfo := httpclient.AndroidAppClient
 	httpClient, err := httpclient.New(httpclient.Options{
+		Logger:      logger,
 		Settings:    application.Settings(),
 		CookiesPath: layout.CookiesFile,
 		ClientInfo:  clientInfo,

@@ -419,10 +419,16 @@ func (s *Scheduler) ChangeState(state State) {
 	}
 
 	s.mu.Lock()
+	previous := s.state
 	if s.state != StateExit {
 		s.state = state
 	}
+	current := s.state
 	s.mu.Unlock()
+
+	if previous != current {
+		s.logger.Info("调度状态切换", "from", previous, "to", current)
+	}
 	s.signalStateChange()
 }
 
@@ -519,9 +525,12 @@ func (s *Scheduler) handleIdle() {
 }
 
 func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
+	s.logger.Info("开始刷新 inventory")
+
 	if err := s.pubsub.Start(ctx); err != nil {
 		return fmt.Errorf("启动 PubSub 失败: %w", err)
 	}
+	s.logger.Info("PubSub 已启动，开始校验认证并拉取 inventory")
 
 	snapshot, err := s.refresher.Refresh(ctx, inventory.RefreshOptions{
 		EnableBadgesEmotes: s.settingsCopy().EnableBadgesEmotes,
@@ -529,6 +538,12 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("刷新 inventory 失败: %w", err)
 	}
+	s.logger.Info(
+		"inventory 刷新完成",
+		"campaign_count", len(snapshot.Campaigns),
+		"drop_count", len(snapshot.Drops),
+		"maintenance_trigger_count", len(snapshot.MaintenanceTriggers),
+	)
 
 	s.mu.Lock()
 	s.snapshot = snapshot
@@ -541,6 +556,7 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	if err := s.ensureUserTopics(); err != nil {
 		return fmt.Errorf("订阅用户 PubSub topic 失败: %w", err)
 	}
+	s.logger.Info("inventory 已装载，准备进入游戏筛选阶段")
 	s.restartMaintenance(ctx, snapshot.MaintenanceTriggers)
 	s.ChangeState(StateGamesUpdate)
 	return nil
