@@ -1125,8 +1125,10 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 			return
 		}
 
-		if err := s.resolveProgress(ctx, channel); err != nil && !errors.Is(err, context.Canceled) {
-			s.logger.Warn("处理 watch 进度失败", "channel_id", channelID, "error", err)
+		if s.shouldResolveProgress(sentAt) {
+			if err := s.resolveProgress(ctx, channel); err != nil && !errors.Is(err, context.Canceled) {
+				s.logger.Warn("处理 watch 进度失败", "channel_id", channelID, "error", err)
+			}
 		}
 
 		elapsed := s.nowUTC().Sub(sentAt)
@@ -1393,6 +1395,18 @@ func (s *Scheduler) recordProgress(stamp time.Time) {
 	s.mu.Lock()
 	s.lastProgressAt = stamp.UTC()
 	s.mu.Unlock()
+}
+
+func (s *Scheduler) shouldResolveProgress(sentAt time.Time) bool {
+	if s == nil {
+		return false
+	}
+
+	s.mu.RLock()
+	lastProgressAt := s.lastProgressAt
+	s.mu.RUnlock()
+
+	return lastProgressAt.IsZero() || lastProgressAt.Before(sentAt)
 }
 
 func (s *Scheduler) nowUTC() time.Time {
