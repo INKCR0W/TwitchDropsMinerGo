@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -77,6 +78,7 @@ type Tracker struct {
 	settings  config.Settings
 	inventory inventory.Snapshot
 	channels  map[int64]*trackedChannel
+	onChange  func(before, after domain.Channel)
 	wg        sync.WaitGroup
 }
 
@@ -221,6 +223,16 @@ func (t *Tracker) Configure(settings config.Settings, snapshot inventory.Snapsho
 	defer t.mu.Unlock()
 	t.settings = settings
 	t.inventory = snapshot
+}
+
+func (t *Tracker) SetChannelChangeHandler(handler func(before, after domain.Channel)) {
+	if t == nil {
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.onChange = handler
 }
 
 func (t *Tracker) AddChannel(channel domain.Channel) {
@@ -868,13 +880,26 @@ func dropsEnabled(now time.Time, settings config.Settings, snapshot inventory.Sn
 }
 
 func (t *Tracker) applyFetched(channelID int64, fetched fetchedChannel) {
+	var (
+		before  domain.Channel
+		after   domain.Channel
+		handler func(before, after domain.Channel)
+		changed bool
+	)
+
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer func() {
+		t.mu.Unlock()
+		if changed && handler != nil {
+			handler(before, after)
+		}
+	}()
 
 	tracked, ok := t.channels[channelID]
 	if !ok || tracked == nil || tracked.channel == nil {
 		return
 	}
+	before = cloneChannel(tracked.channel)
 
 	if tracked.pendingCancel != nil {
 		tracked.pendingCancel()
@@ -886,22 +911,41 @@ func (t *Tracker) applyFetched(channelID int64, fetched fetchedChannel) {
 		tracked.channel.DisplayName = fetched.DisplayName
 	}
 	tracked.channel.Stream = cloneStream(fetched.Stream)
+	after = cloneChannel(tracked.channel)
+	handler = t.onChange
+	changed = !reflect.DeepEqual(before, after)
 }
 
 func (t *Tracker) setOffline(channelID int64) {
+	var (
+		before  domain.Channel
+		after   domain.Channel
+		handler func(before, after domain.Channel)
+		changed bool
+	)
+
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer func() {
+		t.mu.Unlock()
+		if changed && handler != nil {
+			handler(before, after)
+		}
+	}()
 
 	tracked, ok := t.channels[channelID]
 	if !ok || tracked == nil || tracked.channel == nil {
 		return
 	}
+	before = cloneChannel(tracked.channel)
 	if tracked.pendingCancel != nil {
 		tracked.pendingCancel()
 		tracked.pendingCancel = nil
 	}
 	tracked.channel.PendingStream = false
 	tracked.channel.Stream = nil
+	after = cloneChannel(tracked.channel)
+	handler = t.onChange
+	changed = !reflect.DeepEqual(before, after)
 }
 
 func (t *Tracker) storeSpadeURL(channelID int64, spadeURL string) {

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -101,6 +102,20 @@ func (d *BaseDrop) RewardsText(delimiter string) string {
 		names = append(names, benefit.Name)
 	}
 	return strings.Join(names, delimiter)
+}
+
+func (d *BaseDrop) UpdateClaim(claimID string) {
+	if d == nil {
+		return
+	}
+	d.ClaimID = strings.TrimSpace(claimID)
+}
+
+func (d *BaseDrop) GenerateClaimID(userID int64) string {
+	if d == nil || userID <= 0 || d.Campaign == nil || d.ID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%d#%s#%s", userID, d.Campaign.ID, d.ID)
 }
 
 func (d *BaseDrop) baseEarnConditions() bool {
@@ -225,4 +240,48 @@ func (d *TimedDrop) baseEarnConditions() bool {
 		d.BaseDrop.baseEarnConditions() &&
 		d.RequiredMinutes > 0 &&
 		d.ExtraCurrentMinutes < MaxExtraMinutes
+}
+
+func (d *TimedDrop) UpdateMinutes(newMinutes int) bool {
+	if d == nil {
+		return false
+	}
+
+	switch {
+	case newMinutes < 0:
+		newMinutes = 0
+	case newMinutes > d.RequiredMinutes:
+		newMinutes = d.RequiredMinutes
+	}
+
+	if d.RealCurrentMinutes == newMinutes && d.ExtraCurrentMinutes == 0 {
+		return false
+	}
+
+	d.RealCurrentMinutes = newMinutes
+	d.ExtraCurrentMinutes = 0
+	return true
+}
+
+func (d *TimedDrop) MarkClaimed() bool {
+	if d == nil {
+		return false
+	}
+	if d.IsClaimed && d.RealCurrentMinutes == d.RequiredMinutes && d.ExtraCurrentMinutes == 0 {
+		return false
+	}
+
+	d.IsClaimed = true
+	d.RealCurrentMinutes = d.RequiredMinutes
+	d.ExtraCurrentMinutes = 0
+	return true
+}
+
+func (d *TimedDrop) BumpMinutes(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
+	if d == nil || !d.CanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
+		return false
+	}
+
+	d.ExtraCurrentMinutes++
+	return d.ExtraCurrentMinutes >= MaxExtraMinutes
 }

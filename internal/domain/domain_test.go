@@ -497,6 +497,74 @@ func TestChannelHelpersReflectStreamState(t *testing.T) {
 	}
 }
 
+func TestTimedDropMutationHelpers(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := Game{ID: 50, Name: "Game"}
+	campaign := mustCampaign(t, CampaignSpec{
+		ID:       "campaign-mutate",
+		Name:     "mutate",
+		Game:     game,
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(time.Hour),
+		Drops: []TimedDropSpec{
+			{
+				ID:              "drop-mutate",
+				Name:            "drop-mutate",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(time.Hour),
+				RequiredMinutes: 10,
+				Benefits: []Benefit{
+					{ID: "benefit-mutate", Name: "Reward", Type: BenefitTypeDirectEntitlement},
+				},
+			},
+		},
+	})
+	drop := campaign.Drop("drop-mutate")
+	channel := &Channel{
+		ID:    500,
+		Login: "channel",
+		Stream: &Stream{
+			BroadcastID:  600,
+			Game:         &game,
+			DropsEnabled: true,
+		},
+	}
+
+	if !drop.UpdateMinutes(7) {
+		t.Fatal("更新分钟应返回 true")
+	}
+	if drop.RealCurrentMinutes != 7 || drop.ExtraCurrentMinutes != 0 {
+		t.Fatalf("更新分钟后状态不匹配: real=%d extra=%d", drop.RealCurrentMinutes, drop.ExtraCurrentMinutes)
+	}
+	if !campaign.UpdateMinutes(now, channel, false, false, 9) {
+		t.Fatal("活动更新分钟应返回 true")
+	}
+	if drop.RealCurrentMinutes != 9 {
+		t.Fatalf("活动更新分钟未生效: %d", drop.RealCurrentMinutes)
+	}
+	if reached := campaign.BumpMinutes(now, channel, false, false); reached {
+		t.Fatal("首次补分钟不应达到上限")
+	}
+	if drop.ExtraCurrentMinutes != 1 {
+		t.Fatalf("补分钟未生效: %d", drop.ExtraCurrentMinutes)
+	}
+
+	drop.UpdateClaim(drop.GenerateClaimID(42))
+	if drop.ClaimID != "42#campaign-mutate#drop-mutate" {
+		t.Fatalf("claim id 生成不匹配: %q", drop.ClaimID)
+	}
+	if !drop.MarkClaimed() {
+		t.Fatal("标记领取应返回 true")
+	}
+	if !drop.IsClaimed || drop.RealCurrentMinutes != drop.RequiredMinutes || drop.ExtraCurrentMinutes != 0 {
+		t.Fatalf("标记领取后状态不匹配: %#v", drop)
+	}
+}
+
 func mustCampaign(t *testing.T, spec CampaignSpec) *DropsCampaign {
 	t.Helper()
 

@@ -309,6 +309,10 @@ func (c *DropsCampaign) FirstEarnableDrop(now time.Time, channel *Channel, enabl
 	return selected
 }
 
+func (c *DropsCampaign) FirstDrop(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) *TimedDrop {
+	return c.FirstEarnableDrop(now, channel, enableBadgesEmotes, ignoreChannelStatus)
+}
+
 func (c *DropsCampaign) PreconditionsChain() []string {
 	if c == nil {
 		return nil
@@ -343,6 +347,37 @@ func (c *DropsCampaign) CanEarn(now time.Time, channel *Channel, enableBadgesEmo
 		}
 	}
 	return false
+}
+
+func (c *DropsCampaign) UpdateMinutes(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool, newMinutes int) bool {
+	if c == nil {
+		return false
+	}
+
+	updated := false
+	for _, drop := range c.Drops() {
+		if !drop.CanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
+			continue
+		}
+		if drop.UpdateMinutes(newMinutes) {
+			updated = true
+		}
+	}
+	return updated
+}
+
+func (c *DropsCampaign) BumpMinutes(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
+	if c == nil {
+		return false
+	}
+
+	reachedLimit := false
+	for _, drop := range c.Drops() {
+		if drop.BumpMinutes(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
+			reachedLimit = true
+		}
+	}
+	return reachedLimit
 }
 
 func (c *DropsCampaign) CanEarnWithin(now time.Time, stamp time.Time, enableBadgesEmotes bool) bool {

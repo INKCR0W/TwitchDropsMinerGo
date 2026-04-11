@@ -383,6 +383,66 @@ func TestProcessStreamEventsHonorOnlineDelayAndStatusTransitions(t *testing.T) {
 	}
 }
 
+func TestTrackerNotifiesChannelChangeHandler(t *testing.T) {
+	t.Parallel()
+
+	fakeGQL := &fakeGQLClient{
+		doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
+			return gql.Response{
+				Data: map[string]any{
+					"user": map[string]any{
+						"id":          "90",
+						"displayName": "Notify",
+						"stream": map[string]any{
+							"id":           "900",
+							"viewersCount": 10,
+						},
+						"broadcastSettings": map[string]any{
+							"title": "Live",
+							"game": map[string]any{
+								"id":          "9",
+								"displayName": "Game",
+							},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	tracker := newTestTracker(t, testTrackerOptions{gqlClient: fakeGQL})
+	tracker.AddChannel(domain.Channel{ID: 90, Login: "notify"})
+
+	changes := make(chan struct {
+		before domain.Channel
+		after  domain.Channel
+	}, 2)
+	tracker.SetChannelChangeHandler(func(before, after domain.Channel) {
+		changes <- struct {
+			before domain.Channel
+			after  domain.Channel
+		}{before: before, after: after}
+	})
+
+	if _, err := tracker.SyncChannel(context.Background(), 90); err != nil {
+		t.Fatalf("SyncChannel 返回错误: %v", err)
+	}
+
+	first := <-changes
+	if first.before.Stream != nil || first.after.Stream == nil {
+		t.Fatalf("首次同步的前后状态不匹配: %#v", first)
+	}
+
+	if err := tracker.ProcessStreamState(context.Background(), 90, json.RawMessage(`{"type":"stream-down"}`)); err != nil {
+		t.Fatalf("ProcessStreamState 返回错误: %v", err)
+	}
+
+	second := <-changes
+	if second.before.Stream == nil || second.after.Stream != nil {
+		t.Fatalf("下线通知的前后状态不匹配: %#v", second)
+	}
+}
+
 func TestSendWatchFallsBackToSettingsJSAndPostsFormPayload(t *testing.T) {
 	t.Parallel()
 
