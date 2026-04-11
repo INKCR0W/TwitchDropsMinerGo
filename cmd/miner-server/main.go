@@ -32,8 +32,21 @@ import (
 
 const defaultListenAddr = "127.0.0.1:8080"
 
+const defaultRuntimeShutdownTimeout = 10 * time.Second
+
+var errRuntimeShutdownTimeout = errors.New("运行组件退出超时")
+
 type runner interface {
 	Run(context.Context) error
+}
+
+type runtimeSettingsController interface {
+	Settings() config.Settings
+	UpdateSettings(config.Settings) error
+}
+
+type settingsUpdater interface {
+	UpdateSettings(config.Settings) error
 }
 
 func main() {
@@ -213,22 +226,13 @@ func run(args []string) int {
 		CurrentSettings: func(context.Context) (config.Settings, error) {
 			return application.Settings(), nil
 		},
-		UpdateSettings: func(ctx context.Context, next config.Settings) (config.Settings, error) {
-			current := application.Settings()
-			if err := validateHotUpdatableSettings(current, next); err != nil {
-				return config.Settings{}, err
-			}
-			if err := application.UpdateSettings(next); err != nil {
-				return config.Settings{}, err
-			}
-			if err := schedulerInstance.UpdateSettings(application.Settings()); err != nil {
-				if rollbackErr := application.UpdateSettings(current); rollbackErr != nil {
-					logger.Error("回滚运行配置失败", "error", rollbackErr)
-				}
+		UpdateSettings: func(_ context.Context, next config.Settings) (config.Settings, error) {
+			updated, err := applyRuntimeSettings(application, schedulerInstance, next, logger)
+			if err != nil {
 				return config.Settings{}, err
 			}
 			logger.Info("运行配置已更新")
-			return application.Settings(), nil
+			return updated, nil
 		},
 		Reload: func(context.Context) error {
 			schedulerInstance.Reload()
@@ -300,6 +304,14 @@ func ensureSettingsFile(path string, settings config.Settings) error {
 }
 
 func runService(ctx context.Context, stop context.CancelFunc, application *app.App, service runner, server *http.Server, logger *slog.Logger) error {
+	return runServiceWithTimeout(ctx, stop, application, service, server, logger, defaultRuntimeShutdownTimeout)
+}
+
+func runServiceWithTimeout(ctx context.Context, stop context.CancelFunc, application *app.App, service runner, server *http.Server, logger *slog.Logger, shutdownTimeout time.Duration) error {
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = defaultRuntimeShutdownTimeout
+	}
+
 	appErrCh := make(chan error, 1)
 	serviceErrCh := make(chan error, 1)
 	serverErrCh := make(chan error, 1)
@@ -341,23 +353,64 @@ func runService(ctx context.Context, stop context.CancelFunc, application *app.A
 
 	stop()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) && serverErr == nil {
 		serverErr = err
 	}
 
 	if !serverDone {
-		serverErr = <-serverErrCh
+		if err := waitRuntimeResult(shutdownCtx, serverErrCh, "HTTP 服务"); serverErr == nil {
+			serverErr = err
+		}
 	}
 	if !appDone {
-		appErr = <-appErrCh
+		appErr = waitRuntimeResult(shutdownCtx, appErrCh, "应用状态持久化")
 	}
 	if !serviceDone {
-		serviceErr = <-serviceErrCh
+		serviceErr = waitRuntimeResult(shutdownCtx, serviceErrCh, "调度服务")
 	}
 
 	return firstRuntimeError(appErr, serviceErr, serverErr)
+}
+
+func waitRuntimeResult(ctx context.Context, errCh <-chan error, component string) error {
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("%w: %s", errRuntimeShutdownTimeout, component)
+	}
+}
+
+func applyRuntimeSettings(application runtimeSettingsController, updater settingsUpdater, next config.Settings, logger *slog.Logger) (config.Settings, error) {
+	if application == nil {
+		return config.Settings{}, fmt.Errorf("应用未初始化")
+	}
+	if updater == nil {
+		return config.Settings{}, fmt.Errorf("配置热更新器未初始化")
+	}
+
+	current := application.Settings()
+	if err := validateHotUpdatableSettings(current, next); err != nil {
+		return config.Settings{}, err
+	}
+	if err := application.UpdateSettings(next); err != nil {
+		return config.Settings{}, err
+	}
+
+	updated := application.Settings()
+	if err := updater.UpdateSettings(updated); err != nil {
+		if rollbackErr := application.UpdateSettings(current); rollbackErr != nil {
+			if logger != nil {
+				logger.Error("回滚运行配置失败", "error", rollbackErr)
+			}
+			return config.Settings{}, errors.Join(err, fmt.Errorf("回滚运行配置失败: %w", rollbackErr))
+		}
+		return config.Settings{}, err
+	}
+
+	return application.Settings(), nil
 }
 
 func firstRuntimeError(errorsToCheck ...error) error {
