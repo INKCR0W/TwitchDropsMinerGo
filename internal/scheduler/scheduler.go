@@ -96,6 +96,21 @@ type Options struct {
 	MaxChannels       int
 }
 
+type StatusSnapshot struct {
+	State                  State
+	WantedGames            []domain.Game
+	WatchingChannelID      int64
+	SelectedChannelID      int64
+	FullCleanup            bool
+	LastProgressAt         time.Time
+	Channels               []domain.Channel
+	InventoryCampaignCount int
+	InventoryDropCount     int
+	UserTopicUserID        int64
+	AuthenticatedUserID    int64
+	PubSub                 pubsub.Status
+}
+
 type Scheduler struct {
 	logger            *slog.Logger
 	settings          config.Settings
@@ -161,6 +176,10 @@ type claimCandidate struct {
 	ClaimID    string
 }
 
+type pubsubStatusProvider interface {
+	Status() pubsub.Status
+}
+
 func New(options Options) (*Scheduler, error) {
 	if options.Refresher == nil {
 		return nil, fmt.Errorf("scheduler inventory 刷新器不能为空")
@@ -218,9 +237,14 @@ func New(options Options) (*Scheduler, error) {
 		maxChannels = pubsub.MaxChannels
 	}
 
+	settings := options.Settings.Clone()
+	if settings.IsZero() {
+		settings = config.DefaultSettings()
+	}
+
 	scheduler := &Scheduler{
 		logger:            logger,
-		settings:          options.Settings,
+		settings:          settings,
 		refresher:         options.Refresher,
 		tracker:           options.Tracker,
 		pubsub:            options.PubSub,
@@ -244,6 +268,69 @@ func New(options Options) (*Scheduler, error) {
 	}
 
 	return scheduler, nil
+}
+
+func (s *Scheduler) StatusSnapshot() StatusSnapshot {
+	if s == nil {
+		return StatusSnapshot{}
+	}
+
+	s.mu.RLock()
+	status := StatusSnapshot{
+		State:                  s.state,
+		WantedGames:            append([]domain.Game(nil), s.wantedGames...),
+		WatchingChannelID:      s.watchingChannelID,
+		SelectedChannelID:      s.selectedChannelID,
+		FullCleanup:            s.fullCleanup,
+		LastProgressAt:         s.lastProgressAt,
+		Channels:               make([]domain.Channel, 0, len(s.channels)),
+		InventoryCampaignCount: len(s.snapshot.Campaigns),
+		InventoryDropCount:     len(s.snapshot.Drops),
+		UserTopicUserID:        s.userTopicUserID,
+	}
+	for _, channel := range s.channels {
+		status.Channels = append(status.Channels, cloneChannel(channel))
+	}
+	s.mu.RUnlock()
+
+	sort.Slice(status.Channels, func(i, j int) bool {
+		return status.Channels[i].ID < status.Channels[j].ID
+	})
+
+	authSnapshot := s.authState.Snapshot()
+	status.AuthenticatedUserID = authSnapshot.UserID
+
+	if provider, ok := s.pubsub.(pubsubStatusProvider); ok {
+		status.PubSub = provider.Status()
+	}
+
+	return status
+}
+
+func (s *Scheduler) Reload() {
+	if s == nil {
+		return
+	}
+	s.ChangeState(StateInventoryFetch)
+}
+
+func (s *Scheduler) UpdateSettings(settings config.Settings) error {
+	if s == nil {
+		return fmt.Errorf("scheduler 未初始化")
+	}
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+
+	cloned := settings.Clone()
+	s.mu.Lock()
+	s.settings = cloned
+	s.mu.Unlock()
+
+	trackerSnapshot := s.snapshotCopy()
+	s.tracker.Configure(cloned, trackerSnapshot)
+	s.Reload()
+	return nil
 }
 
 func (s *Scheduler) Run(ctx context.Context) error {
@@ -1299,7 +1386,7 @@ func (s *Scheduler) snapshotCopy() inventory.Snapshot {
 func (s *Scheduler) settingsCopy() config.Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.settings
+	return s.settings.Clone()
 }
 
 func (s *Scheduler) recordProgress(stamp time.Time) {

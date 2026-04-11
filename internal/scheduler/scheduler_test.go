@@ -712,6 +712,75 @@ func TestMaintenanceLoopRequestsCleanupThenReload(t *testing.T) {
 	}
 }
 
+func TestStatusSnapshotIncludesSchedulerAndPubSubState(t *testing.T) {
+	t.Parallel()
+
+	game := domain.Game{ID: 1, Name: "Watched"}
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
+	scheduler.state = StateChannelSwitch
+	scheduler.wantedGames = []domain.Game{game}
+	scheduler.selectedChannelID = 10
+	scheduler.watchingChannelID = 20
+	scheduler.userTopicUserID = 42
+	scheduler.lastProgressAt = testTime()
+	scheduler.channels = map[int64]domain.Channel{
+		20: {
+			ID:    20,
+			Login: "watching",
+			Stream: &domain.Stream{
+				BroadcastID:  200,
+				Game:         &game,
+				DropsEnabled: true,
+			},
+		},
+	}
+
+	status := scheduler.StatusSnapshot()
+	if status.State != StateChannelSwitch {
+		t.Fatalf("State 不匹配: %s", status.State)
+	}
+	if status.AuthenticatedUserID != 1 || status.UserTopicUserID != 42 {
+		t.Fatalf("认证状态快照不匹配: %#v", status)
+	}
+	if status.PubSub.TopicCount != 0 {
+		t.Fatalf("PubSub 状态不匹配: %#v", status.PubSub)
+	}
+	if len(status.Channels) != 1 || status.Channels[0].ID != 20 {
+		t.Fatalf("频道快照不匹配: %#v", status.Channels)
+	}
+}
+
+func TestUpdateSettingsReconfiguresTrackerAndRequestsReload(t *testing.T) {
+	t.Parallel()
+
+	tracker := newFakeTracker()
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		tracker: tracker,
+		settings: config.Settings{
+			Priority: []string{"A"},
+		},
+	})
+	scheduler.state = StateIdle
+
+	updated := config.DefaultSettings()
+	updated.AvailableDropsCheck = true
+	updated.Priority = []string{"B"}
+
+	if err := scheduler.UpdateSettings(updated); err != nil {
+		t.Fatalf("UpdateSettings 返回错误: %v", err)
+	}
+
+	if scheduler.State() != StateInventoryFetch {
+		t.Fatalf("UpdateSettings 应触发 inventory reload: %s", scheduler.State())
+	}
+	if !tracker.configuredSettings.AvailableDropsCheck {
+		t.Fatalf("Tracker 未收到最新配置: %#v", tracker.configuredSettings)
+	}
+	if tracker.configuredSettings.Priority[0] != "B" {
+		t.Fatalf("Tracker Priority 配置不匹配: %#v", tracker.configuredSettings)
+	}
+}
+
 type testSchedulerOptions struct {
 	settings          config.Settings
 	refresher         InventoryRefresher
@@ -798,12 +867,14 @@ func (f *fakeRefresher) Refresh(ctx context.Context, options inventory.RefreshOp
 }
 
 type fakeTracker struct {
-	mu               sync.Mutex
-	channels         map[int64]domain.Channel
-	onChange         func(before, after domain.Channel)
-	syncChannelsFunc func(context.Context, []int64) error
-	sendWatchFunc    func(context.Context, int64) (bool, error)
-	sendCount        int
+	mu                 sync.Mutex
+	channels           map[int64]domain.Channel
+	onChange           func(before, after domain.Channel)
+	syncChannelsFunc   func(context.Context, []int64) error
+	sendWatchFunc      func(context.Context, int64) (bool, error)
+	sendCount          int
+	configuredSettings config.Settings
+	configuredSnapshot inventory.Snapshot
 }
 
 func newFakeTracker() *fakeTracker {
@@ -812,7 +883,12 @@ func newFakeTracker() *fakeTracker {
 	}
 }
 
-func (f *fakeTracker) Configure(config.Settings, inventory.Snapshot) {}
+func (f *fakeTracker) Configure(settings config.Settings, snapshot inventory.Snapshot) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.configuredSettings = settings.Clone()
+	f.configuredSnapshot = snapshot
+}
 
 func (f *fakeTracker) SetChannelChangeHandler(handler func(before, after domain.Channel)) {
 	f.mu.Lock()

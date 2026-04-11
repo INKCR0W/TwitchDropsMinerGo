@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"twitchdropsminergo/internal/config"
 )
 
 func TestRunWaitsForCancellation(t *testing.T) {
@@ -134,6 +136,56 @@ func TestNewFailsWhenStateLoadFails(t *testing.T) {
 	}
 }
 
+func TestNewLoadsSettingsFromStore(t *testing.T) {
+	t.Parallel()
+
+	application, err := New(Options{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Settings: &memorySettingsStore{
+			settings: config.Settings{
+				Language: "简体中文",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	if got := application.Settings().Language; got != "简体中文" {
+		t.Fatalf("Settings 未装载外部配置: %q", got)
+	}
+}
+
+func TestUpdateSettingsPersistsAndClonesValues(t *testing.T) {
+	t.Parallel()
+
+	store := &memorySettingsStore{}
+	application, err := New(Options{
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Settings: store,
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	settings := config.DefaultSettings()
+	settings.Priority = []string{"A"}
+
+	if err := application.UpdateSettings(settings); err != nil {
+		t.Fatalf("UpdateSettings 返回错误: %v", err)
+	}
+
+	settings.Priority[0] = "B"
+
+	current := application.Settings()
+	if current.Priority[0] != "A" {
+		t.Fatalf("App 持有的 Priority 不应受外部切片影响: %#v", current.Priority)
+	}
+	if store.settings.Priority[0] != "A" {
+		t.Fatalf("Store 持有的 Priority 不应受外部切片影响: %#v", store.settings.Priority)
+	}
+}
+
 type memoryStateStore struct {
 	state       RuntimeState
 	loadErr     error
@@ -160,5 +212,29 @@ func (m *memoryStateStore) Save(state RuntimeState) error {
 
 	m.state = state
 	m.savedStates = append(m.savedStates, state)
+	return nil
+}
+
+type memorySettingsStore struct {
+	settings config.Settings
+	loadErr  error
+	saveErr  error
+}
+
+func (m *memorySettingsStore) Load() (config.Settings, error) {
+	if m.loadErr != nil {
+		return config.Settings{}, m.loadErr
+	}
+	if m.settings.IsZero() {
+		m.settings = config.DefaultSettings()
+	}
+	return m.settings.Clone(), nil
+}
+
+func (m *memorySettingsStore) Save(settings config.Settings) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	m.settings = settings.Clone()
 	return nil
 }

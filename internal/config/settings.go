@@ -23,6 +23,15 @@ type LoggingSettings struct {
 	AddSource   bool   `json:"add_source"`
 }
 
+type Store interface {
+	Load() (Settings, error)
+	Save(Settings) error
+}
+
+type FileStore struct {
+	path string
+}
+
 type Settings struct {
 	Proxy               string          `json:"proxy"`
 	Language            string          `json:"language"`
@@ -53,6 +62,46 @@ func DefaultSettings() Settings {
 			AddSource:   false,
 		},
 	}
+}
+
+func NewFileStore(path string) *FileStore {
+	return &FileStore{path: strings.TrimSpace(path)}
+}
+
+func (s Settings) Clone() Settings {
+	cloned := s
+	cloned.Exclude = append([]string(nil), s.Exclude...)
+	cloned.Priority = append([]string(nil), s.Priority...)
+	return cloned
+}
+
+func (s Settings) Sanitized() Settings {
+	sanitized := s.Clone()
+	sanitized.Proxy = sanitizeProxyURL(sanitized.Proxy)
+	return sanitized
+}
+
+func (s Settings) IsZero() bool {
+	return s.Proxy == "" &&
+		s.Language == "" &&
+		!s.DarkMode &&
+		len(s.Exclude) == 0 &&
+		len(s.Priority) == 0 &&
+		!s.AutostartTray &&
+		s.ConnectionQuality == 0 &&
+		!s.TrayNotifications &&
+		!s.EnableBadgesEmotes &&
+		!s.AvailableDropsCheck &&
+		s.PriorityMode == "" &&
+		s.Log == (LoggingSettings{})
+}
+
+func (f *FileStore) Load() (Settings, error) {
+	return Load(f.path)
+}
+
+func (f *FileStore) Save(settings Settings) error {
+	return Save(f.path, settings)
 }
 
 func Load(path string) (Settings, error) {
@@ -162,4 +211,19 @@ func normalizeStringList(values []string) []string {
 	}
 
 	return normalized
+}
+
+func sanitizeProxyURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+
+	parsed.User = nil
+	return parsed.String()
 }
