@@ -76,6 +76,25 @@ func TestLoadRejectsInvalidConnectionQuality(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsSmartBalancePriorityMode(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := storage.SaveJSONFile(path, map[string]any{
+		"priority_mode": "smart_balance",
+	}); err != nil {
+		t.Fatalf("写入测试配置失败: %v", err)
+	}
+
+	settings, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 返回错误: %v", err)
+	}
+	if settings.PriorityMode != SmartBalance {
+		t.Fatalf("PriorityMode 应为 smart_balance: %q", settings.PriorityMode)
+	}
+}
+
 func TestSettingsCloneCopiesSlices(t *testing.T) {
 	t.Parallel()
 

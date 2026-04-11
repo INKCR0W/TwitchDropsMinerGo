@@ -984,6 +984,14 @@ func (s *Scheduler) computeWantedGames(now time.Time) []domain.Game {
 	nextHour := now.Add(time.Hour)
 
 	campaigns := append([]*domain.DropsCampaign(nil), snapshot.Inventory...)
+	if settings.PriorityMode == config.SmartBalance {
+		return computeSmartWantedGames(campaigns, now, nextHour, settings)
+	}
+
+	return computeLegacyWantedGames(campaigns, now, nextHour, settings)
+}
+
+func computeLegacyWantedGames(campaigns []*domain.DropsCampaign, now time.Time, nextHour time.Time, settings config.Settings) []domain.Game {
 	if settings.PriorityMode != config.PriorityOnly {
 		switch settings.PriorityMode {
 		case config.EndingSoonest:
@@ -1015,6 +1023,132 @@ func (s *Scheduler) computeWantedGames(now time.Time) []domain.Game {
 		wanted = append(wanted, game)
 	}
 	return wanted
+}
+
+type smartGameCandidate struct {
+	game             domain.Game
+	campaign         *domain.DropsCampaign
+	active           bool
+	availability     float64
+	availabilityRisk int
+	nextDropMinutes  int
+	remainingMinutes int
+	progress         float64
+	priorityIndex    int
+}
+
+func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, nextHour time.Time, settings config.Settings) []domain.Game {
+	bestByGame := make(map[string]smartGameCandidate)
+	for _, campaign := range campaigns {
+		if campaign == nil ||
+			stringInList(campaign.Game.Name, settings.Exclude) ||
+			!campaign.CanEarnWithin(now, nextHour, settings.EnableBadgesEmotes) ||
+			campaignCertainlyUnfinishable(campaign, now) {
+			continue
+		}
+
+		candidate := buildSmartGameCandidate(campaign, now, settings)
+		key := gameKey(candidate.game)
+		current, exists := bestByGame[key]
+		if !exists || smartGameCandidateLess(candidate, current) {
+			bestByGame[key] = candidate
+		}
+	}
+
+	candidates := make([]smartGameCandidate, 0, len(bestByGame))
+	for _, candidate := range bestByGame {
+		candidates = append(candidates, candidate)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return smartGameCandidateLess(candidates[i], candidates[j])
+	})
+
+	wanted := make([]domain.Game, 0, len(candidates))
+	for _, candidate := range candidates {
+		wanted = append(wanted, candidate.game)
+	}
+	return wanted
+}
+
+func buildSmartGameCandidate(campaign *domain.DropsCampaign, now time.Time, settings config.Settings) smartGameCandidate {
+	return smartGameCandidate{
+		game:             campaign.Game,
+		campaign:         campaign,
+		active:           campaign.ActiveAt(now),
+		availability:     campaign.Availability(now),
+		availabilityRisk: smartAvailabilityRisk(campaign.Availability(now)),
+		nextDropMinutes:  smartNextDropMinutes(campaign, now, settings.EnableBadgesEmotes),
+		remainingMinutes: max(campaign.RemainingMinutes(), 0),
+		progress:         campaign.Progress(),
+		priorityIndex:    priorityNameIndex(campaign.Game.Name, settings.Priority),
+	}
+}
+
+func smartGameCandidateLess(left smartGameCandidate, right smartGameCandidate) bool {
+	switch {
+	case left.active != right.active:
+		return left.active && !right.active
+	case left.availabilityRisk != right.availabilityRisk:
+		return left.availabilityRisk < right.availabilityRisk
+	case left.availability != right.availability:
+		return left.availability < right.availability
+	case left.nextDropMinutes != right.nextDropMinutes:
+		return left.nextDropMinutes < right.nextDropMinutes
+	case left.priorityIndex != right.priorityIndex:
+		return left.priorityIndex < right.priorityIndex
+	case left.remainingMinutes != right.remainingMinutes:
+		return left.remainingMinutes < right.remainingMinutes
+	case left.progress != right.progress:
+		return left.progress > right.progress
+	case !left.campaign.EndsAt.Equal(right.campaign.EndsAt):
+		return left.campaign.EndsAt.Before(right.campaign.EndsAt)
+	default:
+		return strings.ToLower(gameName(left.game)) < strings.ToLower(gameName(right.game))
+	}
+}
+
+func smartAvailabilityRisk(value float64) int {
+	switch {
+	case value <= 2:
+		return 0
+	case value <= 4:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func smartNextDropMinutes(campaign *domain.DropsCampaign, now time.Time, enableBadgesEmotes bool) int {
+	if campaign == nil {
+		return math.MaxInt
+	}
+
+	if drop := campaign.FirstEarnableDrop(now, nil, enableBadgesEmotes, true); drop != nil {
+		return max(drop.RemainingMinutes(), 0)
+	}
+
+	return max(campaign.RemainingMinutes(), 0)
+}
+
+func campaignCertainlyUnfinishable(campaign *domain.DropsCampaign, now time.Time) bool {
+	if campaign == nil {
+		return true
+	}
+
+	remainingMinutes := campaign.RemainingMinutes()
+	if remainingMinutes <= 0 {
+		return false
+	}
+
+	earliestEarnAt := now
+	if campaign.StartsAt.After(earliestEarnAt) {
+		earliestEarnAt = campaign.StartsAt
+	}
+	if !campaign.EndsAt.After(earliestEarnAt) {
+		return true
+	}
+
+	return campaign.EndsAt.Sub(earliestEarnAt) < time.Duration(remainingMinutes)*time.Minute
 }
 
 func (s *Scheduler) getLiveStreams(ctx context.Context, game domain.Game, limit int, dropsEnabled bool) ([]domain.Channel, error) {

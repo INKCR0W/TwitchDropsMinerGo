@@ -14,6 +14,7 @@ const (
 	PriorityOnly         PriorityMode = "priority_only"
 	EndingSoonest        PriorityMode = "ending_soonest"
 	LowAvailabilityFirst PriorityMode = "low_availability_first"
+	SmartBalance         PriorityMode = "smart_balance"
 )
 
 type LoggingSettings struct {
@@ -163,7 +164,7 @@ func (s *Settings) Validate() error {
 		s.PriorityMode = defaults.PriorityMode
 	}
 	switch s.PriorityMode {
-	case PriorityOnly, EndingSoonest, LowAvailabilityFirst:
+	case PriorityOnly, EndingSoonest, LowAvailabilityFirst, SmartBalance:
 	default:
 		return fmt.Errorf("priority_mode %q 不受支持", s.PriorityMode)
 	}
