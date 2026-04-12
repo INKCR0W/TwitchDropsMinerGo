@@ -1,0 +1,292 @@
+package watch
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+
+	"twitchdropsminergo/internal/config"
+	"twitchdropsminergo/internal/domain"
+	"twitchdropsminergo/internal/gql"
+	"twitchdropsminergo/internal/inventory"
+)
+
+func (t *Tracker) SyncChannel(ctx context.Context, channelID int64) (bool, error) {
+	if t == nil {
+		return false, fmt.Errorf("watch 跟踪器未初始化")
+	}
+
+	spec, settings, snapshot, err := t.lookupChannel(channelID)
+	if err != nil {
+		return false, err
+	}
+
+	fetched, err := t.fetchChannel(ctx, spec, settings, snapshot)
+	if err != nil {
+		return false, err
+	}
+
+	t.applyFetched(channelID, fetched)
+	return fetched.Stream != nil, nil
+}
+
+func (t *Tracker) SyncChannels(ctx context.Context, channelIDs ...int64) error {
+	if t == nil {
+		return fmt.Errorf("watch 跟踪器未初始化")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	specs, settings, snapshot, err := t.collectChannels(channelIDs)
+	if err != nil {
+		return err
+	}
+	if len(specs) == 0 {
+		return nil
+	}
+
+	fetched := make(map[int64]fetchedChannel, len(specs))
+	for _, chunk := range chunkSpecs(specs, t.batchSize) {
+		operations := make([]gql.Operation, 0, len(chunk))
+		for _, spec := range chunk {
+			operation, err := gql.MustLookup(gql.OperationGetStreamInfo).WithVariables(map[string]any{
+				"channel": spec.Login,
+			})
+			if err != nil {
+				return fmt.Errorf("构造 GetStreamInfo 请求失败: %w", err)
+			}
+			operations = append(operations, operation)
+		}
+
+		responses, err := t.gqlClient.DoBatch(ctx, operations)
+		if err != nil {
+			return fmt.Errorf("批量请求 GetStreamInfo 失败: %w", err)
+		}
+
+		pendingDrops := make([]channelSpec, 0, len(chunk))
+		for index, response := range responses {
+			result, err := parseGetStreamInfoResponse(chunk[index], response, settings.AvailableDropsCheck)
+			if err != nil {
+				return err
+			}
+			fetched[chunk[index].ID] = result
+			if result.Stream != nil && settings.AvailableDropsCheck {
+				pendingDrops = append(pendingDrops, chunk[index])
+			}
+		}
+
+		if len(pendingDrops) > 0 {
+			if err := t.fillDropsEnabledBatch(ctx, pendingDrops, fetched, settings, snapshot); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, spec := range specs {
+		result, ok := fetched[spec.ID]
+		if !ok {
+			continue
+		}
+		t.applyFetched(spec.ID, result)
+	}
+
+	return nil
+}
+
+func (t *Tracker) CheckOnline(channelID int64) error {
+	if t == nil {
+		return fmt.Errorf("watch 跟踪器未初始化")
+	}
+
+	t.mu.Lock()
+	tracked, ok := t.channels[channelID]
+	if !ok || tracked == nil || tracked.channel == nil {
+		t.mu.Unlock()
+		return ErrChannelNotTracked
+	}
+	if tracked.pendingCancel != nil {
+		t.mu.Unlock()
+		return nil
+	}
+
+	pendingCtx, cancel := context.WithCancel(t.ctx)
+	tracked.pendingSeq++
+	sequence := tracked.pendingSeq
+	tracked.pendingCancel = cancel
+	tracked.channel.PendingStream = true
+	t.wg.Add(1)
+	t.mu.Unlock()
+
+	go func() {
+		defer t.wg.Done()
+
+		if err := t.sleep(pendingCtx, t.onlineDelay); err != nil {
+			return
+		}
+
+		t.mu.Lock()
+		tracked, ok := t.channels[channelID]
+		if !ok || tracked == nil || tracked.channel == nil || tracked.pendingCancel == nil || tracked.pendingSeq != sequence {
+			t.mu.Unlock()
+			return
+		}
+		tracked.pendingCancel = nil
+		tracked.channel.PendingStream = false
+		t.mu.Unlock()
+
+		_, _ = t.SyncChannel(t.ctx, channelID)
+	}()
+
+	return nil
+}
+
+func (t *Tracker) lookupChannel(channelID int64) (channelSpec, config.Settings, inventory.Snapshot, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	tracked, ok := t.channels[channelID]
+	if !ok || tracked == nil || tracked.channel == nil {
+		return channelSpec{}, config.Settings{}, inventory.Snapshot{}, ErrChannelNotTracked
+	}
+
+	return channelSpec{
+		ID:          tracked.channel.ID,
+		Login:       tracked.channel.Login,
+		DisplayName: tracked.channel.DisplayName,
+		ACLBased:    tracked.channel.ACLBased,
+	}, t.settings, t.inventory, nil
+}
+
+func (t *Tracker) collectChannels(channelIDs []int64) ([]channelSpec, config.Settings, inventory.Snapshot, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	settings := t.settings
+	snapshot := t.inventory
+	if len(channelIDs) == 0 {
+		specs := make([]channelSpec, 0, len(t.channels))
+		for _, tracked := range t.channels {
+			if tracked == nil || tracked.channel == nil {
+				continue
+			}
+			specs = append(specs, channelSpec{
+				ID:          tracked.channel.ID,
+				Login:       tracked.channel.Login,
+				DisplayName: tracked.channel.DisplayName,
+				ACLBased:    tracked.channel.ACLBased,
+			})
+		}
+		return specs, settings, snapshot, nil
+	}
+
+	specs := make([]channelSpec, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		tracked, ok := t.channels[channelID]
+		if !ok || tracked == nil || tracked.channel == nil {
+			return nil, config.Settings{}, inventory.Snapshot{}, ErrChannelNotTracked
+		}
+		specs = append(specs, channelSpec{
+			ID:          tracked.channel.ID,
+			Login:       tracked.channel.Login,
+			DisplayName: tracked.channel.DisplayName,
+			ACLBased:    tracked.channel.ACLBased,
+		})
+	}
+	return specs, settings, snapshot, nil
+}
+
+func (t *Tracker) fetchChannel(ctx context.Context, spec channelSpec, settings config.Settings, snapshot inventory.Snapshot) (fetchedChannel, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	operation, err := gql.MustLookup(gql.OperationGetStreamInfo).WithVariables(map[string]any{
+		"channel": spec.Login,
+	})
+	if err != nil {
+		return fetchedChannel{}, fmt.Errorf("构造 GetStreamInfo 请求失败: %w", err)
+	}
+
+	response, err := t.gqlClient.Do(ctx, operation)
+	if err != nil {
+		return fetchedChannel{}, fmt.Errorf("请求 GetStreamInfo 失败: %w", err)
+	}
+
+	fetched, err := parseGetStreamInfoResponse(spec, response, settings.AvailableDropsCheck)
+	if err != nil {
+		return fetchedChannel{}, err
+	}
+
+	if fetched.Stream == nil || !settings.AvailableDropsCheck {
+		return fetched, nil
+	}
+
+	available, err := gql.MustLookup(gql.OperationAvailableDrops).WithVariables(map[string]any{
+		"channelID": strconv.FormatInt(spec.ID, 10),
+	})
+	if err != nil {
+		return fetchedChannel{}, fmt.Errorf("构造 AvailableDrops 请求失败: %w", err)
+	}
+
+	response, err = t.gqlClient.Do(ctx, available)
+	if err != nil {
+		return fetched, nil
+	}
+
+	campaignIDs, err := parseAvailableDropsResponse(response)
+	if err != nil {
+		return fetchedChannel{}, err
+	}
+
+	channel := &domain.Channel{
+		ID:          spec.ID,
+		Login:       spec.Login,
+		DisplayName: firstNonEmpty(fetched.DisplayName, spec.DisplayName),
+		Stream:      cloneStream(fetched.Stream),
+		ACLBased:    spec.ACLBased,
+	}
+	fetched.Stream.DropsEnabled = dropsEnabled(t.now().UTC(), settings, snapshot, channel, campaignIDs)
+	return fetched, nil
+}
+
+func (t *Tracker) fillDropsEnabledBatch(ctx context.Context, specs []channelSpec, fetched map[int64]fetchedChannel, settings config.Settings, snapshot inventory.Snapshot) error {
+	operations := make([]gql.Operation, 0, len(specs))
+	for _, spec := range specs {
+		operation, err := gql.MustLookup(gql.OperationAvailableDrops).WithVariables(map[string]any{
+			"channelID": strconv.FormatInt(spec.ID, 10),
+		})
+		if err != nil {
+			return fmt.Errorf("构造 AvailableDrops 请求失败: %w", err)
+		}
+		operations = append(operations, operation)
+	}
+
+	responses, err := t.gqlClient.DoBatch(ctx, operations)
+	if err != nil {
+		return fmt.Errorf("批量请求 AvailableDrops 失败: %w", err)
+	}
+
+	for index, response := range responses {
+		campaignIDs, err := parseAvailableDropsResponse(response)
+		if err != nil {
+			return err
+		}
+
+		result := fetched[specs[index].ID]
+		if result.Stream == nil {
+			continue
+		}
+		channel := &domain.Channel{
+			ID:          specs[index].ID,
+			Login:       specs[index].Login,
+			DisplayName: firstNonEmpty(result.DisplayName, specs[index].DisplayName),
+			Stream:      cloneStream(result.Stream),
+			ACLBased:    specs[index].ACLBased,
+		}
+		result.Stream.DropsEnabled = dropsEnabled(t.now().UTC(), settings, snapshot, channel, campaignIDs)
+		fetched[specs[index].ID] = result
+	}
+
+	return nil
+}
