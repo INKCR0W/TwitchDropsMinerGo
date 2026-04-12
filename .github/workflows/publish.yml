@@ -1,0 +1,113 @@
+name: Publish Releases
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish Release Assets
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download workflow artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          gh run download "$RUN_ID" -R "$REPOSITORY" -p 'release-*' -D release-artifacts
+
+      - name: Read publish metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          metadata_path="$(find release-artifacts -type f -name 'release-metadata.env' | head -n 1)"
+          if [[ -z "$metadata_path" ]]; then
+            echo "未找到 release metadata" >&2
+            exit 1
+          fi
+
+          set -a
+          source "$metadata_path"
+          set +a
+
+          echo "release_kind=$RELEASE_KIND" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_title=$RELEASE_TITLE" >> "$GITHUB_OUTPUT"
+          echo "release_target=$RELEASE_TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Publish artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_KIND: ${{ steps.meta.outputs.release_kind }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          RELEASE_TARGET: ${{ steps.meta.outputs.release_target }}
+          RELEASE_TITLE: ${{ steps.meta.outputs.release_title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t assets < <(find release-artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) | sort)
+          if [[ "${#assets[@]}" -eq 0 ]]; then
+            echo "未找到可发布的归档产物" >&2
+            exit 1
+          fi
+
+          if [[ "$RELEASE_KIND" == "release" ]]; then
+            if gh release view "$RELEASE_TAG" -R "$REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber -R "$REPOSITORY"
+            else
+              gh release create "$RELEASE_TAG" "${assets[@]}" \
+                --title "$RELEASE_TITLE" \
+                --verify-tag \
+                --generate-notes \
+                -R "$REPOSITORY"
+            fi
+            exit 0
+          fi
+
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<'EOF'
+          Rolling preview binaries for main and pull requests.
+
+          Asset naming:
+          - main builds use the `main` channel
+          - pull request builds use the `pr-<number>` channel
+
+          Assets are overwritten in place when the same channel is rebuilt.
+          EOF
+
+          if gh release view "$RELEASE_TAG" -R "$REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --target "$RELEASE_TARGET" \
+              --prerelease \
+              --notes-file "$notes_file" \
+              -R "$REPOSITORY"
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber -R "$REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --title "$RELEASE_TITLE" \
+              --target "$RELEASE_TARGET" \
+              --prerelease \
+              --notes-file "$notes_file" \
+              -R "$REPOSITORY"
+          fi

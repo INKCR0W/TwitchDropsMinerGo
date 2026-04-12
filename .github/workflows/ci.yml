@@ -1,0 +1,199 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare Release Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_prefix: ${{ steps.meta.outputs.artifact_prefix }}
+    steps:
+      - name: Build release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          event_name="${{ github.event_name }}"
+          release_kind="prerelease"
+          release_tag="pre-release"
+          release_title="Pre-release"
+          release_target="main"
+          source_ref="${GITHUB_REF}"
+          source_name="${GITHUB_REF_NAME}"
+          asset_channel="main"
+
+          if [[ "$event_name" == "pull_request" ]]; then
+            asset_channel="pr-${{ github.event.pull_request.number }}"
+            source_ref="refs/pull/${{ github.event.pull_request.number }}/merge"
+            source_name="PR #${{ github.event.pull_request.number }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            asset_channel="${GITHUB_REF_NAME}"
+            release_kind="release"
+            release_tag="${GITHUB_REF_NAME}"
+            release_title="${GITHUB_REF_NAME}"
+            release_target="${GITHUB_REF_NAME}"
+            source_name="${GITHUB_REF_NAME}"
+          fi
+
+          artifact_prefix="twitchdropsminergo-${asset_channel}"
+          mkdir -p dist/meta
+          metadata_path="dist/meta/release-metadata.env"
+
+          {
+            printf 'ARTIFACT_PREFIX=%q\n' "$artifact_prefix"
+            printf 'ASSET_CHANNEL=%q\n' "$asset_channel"
+            printf 'EVENT_NAME=%q\n' "$event_name"
+            printf 'RELEASE_KIND=%q\n' "$release_kind"
+            printf 'RELEASE_TAG=%q\n' "$release_tag"
+            printf 'RELEASE_TARGET=%q\n' "$release_target"
+            printf 'RELEASE_TITLE=%q\n' "$release_title"
+            printf 'SOURCE_NAME=%q\n' "$source_name"
+            printf 'SOURCE_REF=%q\n' "$source_ref"
+            printf 'SOURCE_SHA=%q\n' "${GITHUB_SHA}"
+          } > "$metadata_path"
+
+          echo "artifact_prefix=$artifact_prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: dist/meta/release-metadata.env
+          if-no-files-found: error
+
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go test
+        run: go test ./...
+
+      - name: Go test -race
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+
+      - name: Go build
+        run: go build ./...
+
+  package:
+    name: Package (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            binary_name: miner-server.exe
+            archive_ext: zip
+          - goos: windows
+            goarch: arm64
+            binary_name: miner-server.exe
+            archive_ext: zip
+          - goos: linux
+            goarch: amd64
+            binary_name: miner-server
+            archive_ext: tar.gz
+          - goos: linux
+            goarch: arm64
+            binary_name: miner-server
+            archive_ext: tar.gz
+          - goos: darwin
+            goarch: amd64
+            binary_name: miner-server
+            archive_ext: tar.gz
+          - goos: darwin
+            goarch: arm64
+            binary_name: miner-server
+            archive_ext: tar.gz
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          package_dir="dist/package/${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "$package_dir"
+
+          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+            go build -trimpath -o "${package_dir}/${{ matrix.binary_name }}" ./cmd/miner-server
+
+      - name: Pack artifact
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive_name="${{ needs.prepare.outputs.artifact_prefix }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          package_dir="dist/package/${{ matrix.goos }}-${{ matrix.goarch }}"
+
+          if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
+            (
+              cd "$package_dir"
+              zip -q -9 "../../${archive_name}.zip" "${{ matrix.binary_name }}"
+            )
+            archive_path="dist/${archive_name}.zip"
+          else
+            tar -C "$package_dir" -czf "dist/${archive_name}.tar.gz" "${{ matrix.binary_name }}"
+            archive_path="dist/${archive_name}.tar.gz"
+          fi
+
+          echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ steps.pack.outputs.archive_path }}
+          if-no-files-found: error
