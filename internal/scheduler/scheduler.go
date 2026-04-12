@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -504,37 +503,6 @@ func (s *Scheduler) Channels() []domain.Channel {
 	return channels
 }
 
-func (s *Scheduler) ActiveCampaign(channel *domain.Channel) *domain.DropsCampaign {
-	if s == nil {
-		return nil
-	}
-
-	now := s.nowUTC()
-	settings := s.settingsCopy()
-	snapshot := s.snapshotCopy()
-
-	if channel == nil {
-		watching := s.currentWatchingChannel()
-		if watching == nil {
-			return nil
-		}
-		channel = watching
-	}
-
-	var selected *domain.DropsCampaign
-	for _, campaign := range snapshot.Inventory {
-		if campaign == nil || !campaign.CanEarn(now, channel, settings.EnableBadgesEmotes, false) {
-			continue
-		}
-		if selected == nil ||
-			campaign.RemainingMinutes() < selected.RemainingMinutes() ||
-			(campaign.RemainingMinutes() == selected.RemainingMinutes() && campaign.ID < selected.ID) {
-			selected = campaign
-		}
-	}
-	return selected
-}
-
 func (s *Scheduler) handleIdle() {
 	s.stopWatching()
 	s.clearStateChange()
@@ -711,9 +679,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 	for _, game := range noACLGames {
 		games = append(games, game)
 	}
-	sort.Slice(games, func(i, j int) bool {
-		return s.priorityIndexByGame(games[i], wantedGames) < s.priorityIndexByGame(games[j], wantedGames)
-	})
+	s.sortGamesByPriority(games, wantedGames)
 	for _, game := range games {
 		channels, err := s.getLiveStreams(ctx, game, s.directoryLimit, true)
 		if err != nil {
@@ -729,15 +695,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 	for _, channel := range newChannels {
 		ordered = append(ordered, channel)
 	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return viewerSortKey(ordered[i]) > viewerSortKey(ordered[j])
-	})
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].ACLBased && !ordered[j].ACLBased
-	})
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return s.priorityIndex(ordered[i]) < s.priorityIndex(ordered[j])
-	})
+	s.sortChannelsByPriority(ordered, wantedGames)
 
 	limit := min(len(ordered), s.maxChannels)
 	desired := make(map[int64]domain.Channel, limit)
@@ -976,179 +934,6 @@ func (s *Scheduler) claimDropRequest(ctx context.Context, claimID string) (bool,
 	default:
 		return false, nil
 	}
-}
-
-func (s *Scheduler) computeWantedGames(now time.Time) []domain.Game {
-	settings := s.settingsCopy()
-	snapshot := s.snapshotCopy()
-	nextHour := now.Add(time.Hour)
-
-	campaigns := append([]*domain.DropsCampaign(nil), snapshot.Inventory...)
-	if settings.PriorityMode == config.SmartBalance {
-		return computeSmartWantedGames(campaigns, now, nextHour, settings)
-	}
-
-	return computeLegacyWantedGames(campaigns, now, nextHour, settings)
-}
-
-func computeLegacyWantedGames(campaigns []*domain.DropsCampaign, now time.Time, nextHour time.Time, settings config.Settings) []domain.Game {
-	if settings.PriorityMode != config.PriorityOnly {
-		switch settings.PriorityMode {
-		case config.EndingSoonest:
-			sort.SliceStable(campaigns, func(i, j int) bool {
-				return campaigns[i].EndsAt.Before(campaigns[j].EndsAt)
-			})
-		case config.LowAvailabilityFirst:
-			sort.SliceStable(campaigns, func(i, j int) bool {
-				return campaigns[i].Availability(now) < campaigns[j].Availability(now)
-			})
-		}
-	}
-	sort.SliceStable(campaigns, func(i, j int) bool {
-		return priorityNameIndex(campaigns[i].Game.Name, settings.Priority) < priorityNameIndex(campaigns[j].Game.Name, settings.Priority)
-	})
-
-	wanted := make([]domain.Game, 0)
-	for _, campaign := range campaigns {
-		if campaign == nil {
-			continue
-		}
-		game := campaign.Game
-		if gameInList(game, wanted) ||
-			stringInList(game.Name, settings.Exclude) ||
-			(settings.PriorityMode == config.PriorityOnly && !stringInList(game.Name, settings.Priority)) ||
-			!campaign.CanEarnWithin(now, nextHour, settings.EnableBadgesEmotes) {
-			continue
-		}
-		wanted = append(wanted, game)
-	}
-	return wanted
-}
-
-type smartGameCandidate struct {
-	game             domain.Game
-	campaign         *domain.DropsCampaign
-	active           bool
-	availability     float64
-	availabilityRisk int
-	nextDropMinutes  int
-	remainingMinutes int
-	progress         float64
-	priorityIndex    int
-}
-
-func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, nextHour time.Time, settings config.Settings) []domain.Game {
-	bestByGame := make(map[string]smartGameCandidate)
-	for _, campaign := range campaigns {
-		if campaign == nil ||
-			stringInList(campaign.Game.Name, settings.Exclude) ||
-			!campaign.CanEarnWithin(now, nextHour, settings.EnableBadgesEmotes) ||
-			campaignCertainlyUnfinishable(campaign, now) {
-			continue
-		}
-
-		candidate := buildSmartGameCandidate(campaign, now, settings)
-		key := gameKey(candidate.game)
-		current, exists := bestByGame[key]
-		if !exists || smartGameCandidateLess(candidate, current) {
-			bestByGame[key] = candidate
-		}
-	}
-
-	candidates := make([]smartGameCandidate, 0, len(bestByGame))
-	for _, candidate := range bestByGame {
-		candidates = append(candidates, candidate)
-	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return smartGameCandidateLess(candidates[i], candidates[j])
-	})
-
-	wanted := make([]domain.Game, 0, len(candidates))
-	for _, candidate := range candidates {
-		wanted = append(wanted, candidate.game)
-	}
-	return wanted
-}
-
-func buildSmartGameCandidate(campaign *domain.DropsCampaign, now time.Time, settings config.Settings) smartGameCandidate {
-	return smartGameCandidate{
-		game:             campaign.Game,
-		campaign:         campaign,
-		active:           campaign.ActiveAt(now),
-		availability:     campaign.Availability(now),
-		availabilityRisk: smartAvailabilityRisk(campaign.Availability(now)),
-		nextDropMinutes:  smartNextDropMinutes(campaign, now, settings.EnableBadgesEmotes),
-		remainingMinutes: max(campaign.RemainingMinutes(), 0),
-		progress:         campaign.Progress(),
-		priorityIndex:    priorityNameIndex(campaign.Game.Name, settings.Priority),
-	}
-}
-
-func smartGameCandidateLess(left smartGameCandidate, right smartGameCandidate) bool {
-	switch {
-	case left.active != right.active:
-		return left.active && !right.active
-	case left.availabilityRisk != right.availabilityRisk:
-		return left.availabilityRisk < right.availabilityRisk
-	case left.availability != right.availability:
-		return left.availability < right.availability
-	case left.nextDropMinutes != right.nextDropMinutes:
-		return left.nextDropMinutes < right.nextDropMinutes
-	case left.priorityIndex != right.priorityIndex:
-		return left.priorityIndex < right.priorityIndex
-	case left.remainingMinutes != right.remainingMinutes:
-		return left.remainingMinutes < right.remainingMinutes
-	case left.progress != right.progress:
-		return left.progress > right.progress
-	case !left.campaign.EndsAt.Equal(right.campaign.EndsAt):
-		return left.campaign.EndsAt.Before(right.campaign.EndsAt)
-	default:
-		return strings.ToLower(gameName(left.game)) < strings.ToLower(gameName(right.game))
-	}
-}
-
-func smartAvailabilityRisk(value float64) int {
-	switch {
-	case value <= 2:
-		return 0
-	case value <= 4:
-		return 1
-	default:
-		return 2
-	}
-}
-
-func smartNextDropMinutes(campaign *domain.DropsCampaign, now time.Time, enableBadgesEmotes bool) int {
-	if campaign == nil {
-		return math.MaxInt
-	}
-
-	if drop := campaign.FirstEarnableDrop(now, nil, enableBadgesEmotes, true); drop != nil {
-		return max(drop.RemainingMinutes(), 0)
-	}
-
-	return max(campaign.RemainingMinutes(), 0)
-}
-
-func campaignCertainlyUnfinishable(campaign *domain.DropsCampaign, now time.Time) bool {
-	if campaign == nil {
-		return true
-	}
-
-	remainingMinutes := campaign.RemainingMinutes()
-	if remainingMinutes <= 0 {
-		return false
-	}
-
-	earliestEarnAt := now
-	if campaign.StartsAt.After(earliestEarnAt) {
-		earliestEarnAt = campaign.StartsAt
-	}
-	if !campaign.EndsAt.After(earliestEarnAt) {
-		return true
-	}
-
-	return campaign.EndsAt.Sub(earliestEarnAt) < time.Duration(remainingMinutes)*time.Minute
 }
 
 func (s *Scheduler) getLiveStreams(ctx context.Context, game domain.Game, limit int, dropsEnabled bool) ([]domain.Channel, error) {
@@ -1523,23 +1308,6 @@ func (s *Scheduler) upsertChannel(channel domain.Channel) {
 	s.tracker.AddChannel(channel)
 }
 
-func (s *Scheduler) priorityIndex(channel domain.Channel) int {
-	game := channel.CurrentGame()
-	if game == nil {
-		return math.MaxInt
-	}
-	return s.priorityIndexByGame(*game, s.WantedGames())
-}
-
-func (s *Scheduler) priorityIndexByGame(game domain.Game, wantedGames []domain.Game) int {
-	for index, wantedGame := range wantedGames {
-		if sameGame(game, wantedGame) {
-			return index
-		}
-	}
-	return math.MaxInt
-}
-
 func (s *Scheduler) selectedChannel() int64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1579,20 +1347,6 @@ func (s *Scheduler) channelsMapCopy() map[int64]domain.Channel {
 		cloned[channelID] = cloneChannel(channel)
 	}
 	return cloned
-}
-
-func (s *Scheduler) channelsSliceSortedByPriority() []domain.Channel {
-	channels := s.Channels()
-	sort.SliceStable(channels, func(i, j int) bool {
-		return viewerSortKey(channels[i]) > viewerSortKey(channels[j])
-	})
-	sort.SliceStable(channels, func(i, j int) bool {
-		return channels[i].ACLBased && !channels[j].ACLBased
-	})
-	sort.SliceStable(channels, func(i, j int) bool {
-		return s.priorityIndex(channels[i]) < s.priorityIndex(channels[j])
-	})
-	return channels
 }
 
 func (s *Scheduler) snapshotCopy() inventory.Snapshot {
@@ -1880,21 +1634,6 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 	return reachedLimit, true
 }
 
-func (s *Scheduler) activeCampaignLocked(now time.Time, channel *domain.Channel) *domain.DropsCampaign {
-	var selected *domain.DropsCampaign
-	for _, campaign := range s.snapshot.Inventory {
-		if campaign == nil || !campaign.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false) {
-			continue
-		}
-		if selected == nil ||
-			campaign.RemainingMinutes() < selected.RemainingMinutes() ||
-			(campaign.RemainingMinutes() == selected.RemainingMinutes() && campaign.ID < selected.ID) {
-			selected = campaign
-		}
-	}
-	return selected
-}
-
 func (s *Scheduler) updateDropClaim(dropID string, claimID string) (string, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1923,19 +1662,6 @@ func (s *Scheduler) markDropClaimed(dropID string) bool {
 		return false
 	}
 	return drop.MarkClaimed()
-}
-
-func (s *Scheduler) campaignCanEarn(campaignID string, channel *domain.Channel) bool {
-	now := s.nowUTC()
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	campaign := s.snapshot.Campaigns[campaignID]
-	if campaign == nil {
-		return false
-	}
-	return campaign.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false)
 }
 
 func userTopicKeys(userID int64) []string {
