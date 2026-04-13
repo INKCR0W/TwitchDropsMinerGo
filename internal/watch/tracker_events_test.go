@@ -3,6 +3,8 @@ package watch
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,8 +17,15 @@ func TestProcessStreamEventsHonorOnlineDelayAndStatusTransitions(t *testing.T) {
 
 	slept := make(chan time.Duration, 1)
 	synced := make(chan struct{}, 1)
+	var syncCalls atomic.Int32
 	fakeGQL := &fakeGQLClient{
 		doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
+			call := syncCalls.Add(1)
+			title := fmt.Sprintf("After delay %d", call)
+			if call > 1 {
+				title = "After update"
+			}
+
 			select {
 			case synced <- struct{}{}:
 			default:
@@ -31,7 +40,7 @@ func TestProcessStreamEventsHonorOnlineDelayAndStatusTransitions(t *testing.T) {
 							"viewersCount": 10,
 						},
 						"broadcastSettings": map[string]any{
-							"title": "After delay",
+							"title": title,
 							"game": map[string]any{
 								"id":          "9",
 								"displayName": "Game",
@@ -73,12 +82,11 @@ func TestProcessStreamEventsHonorOnlineDelayAndStatusTransitions(t *testing.T) {
 		t.Fatal("延迟检查后未触发同步")
 	}
 
-	channel, ok := tracker.Channel(55)
-	if !ok || channel.Stream == nil {
+	channel := waitForTrackedChannel(t, tracker, 55, func(channel domain.Channel) bool {
+		return channel.Stream != nil && channel.Stream.Title == "After delay 1" && !channel.PendingOnline()
+	})
+	if channel.Stream == nil {
 		t.Fatalf("延迟同步后频道应在线: %#v", channel)
-	}
-	if channel.PendingOnline() {
-		t.Fatal("延迟同步完成后不应保留 pending 状态")
 	}
 
 	if err := tracker.ProcessStreamState(context.Background(), 55, json.RawMessage(`{"type":"viewcount","viewers":77}`)); err != nil {
@@ -97,11 +105,16 @@ func TestProcessStreamEventsHonorOnlineDelayAndStatusTransitions(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stream update 应重新触发延迟同步")
 	}
+	waitForTrackedChannel(t, tracker, 55, func(channel domain.Channel) bool {
+		return channel.Stream != nil && channel.Stream.Title == "After update"
+	})
 
 	if err := tracker.ProcessStreamState(context.Background(), 55, json.RawMessage(`{"type":"stream-down"}`)); err != nil {
 		t.Fatalf("处理 stream-down 返回错误: %v", err)
 	}
-	channel, _ = tracker.Channel(55)
+	channel = waitForTrackedChannel(t, tracker, 55, func(channel domain.Channel) bool {
+		return channel.Stream == nil && channel.Offline()
+	})
 	if channel.Stream != nil || !channel.Offline() {
 		t.Fatalf("stream-down 后频道应离线: %#v", channel)
 	}
@@ -165,4 +178,21 @@ func TestTrackerNotifiesChannelChangeHandler(t *testing.T) {
 	if second.before.Stream == nil || second.after.Stream != nil {
 		t.Fatalf("下线通知的前后状态不匹配: %#v", second)
 	}
+}
+
+func waitForTrackedChannel(t *testing.T, tracker *Tracker, channelID int64, predicate func(domain.Channel) bool) domain.Channel {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		channel, ok := tracker.Channel(channelID)
+		if ok && predicate(channel) {
+			return channel
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	channel, _ := tracker.Channel(channelID)
+	t.Fatalf("等待频道状态超时: %#v", channel)
+	return domain.Channel{}
 }

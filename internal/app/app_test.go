@@ -63,7 +63,8 @@ func TestRunRejectsNilContext(t *testing.T) {
 		t.Fatalf("New 返回错误: %v", err)
 	}
 
-	if err := application.Run(nil); err == nil {
+	var nilCtx context.Context
+	if err := application.Run(nilCtx); err == nil {
 		t.Fatal("期望 nil context 返回错误")
 	}
 }

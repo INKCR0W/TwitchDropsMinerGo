@@ -18,8 +18,7 @@ func TestStateValidateRestoresTokenFromCookie(t *testing.T) {
 	var tokenHits atomic.Int32
 	var validateHits atomic.Int32
 
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/":
 			homeHits.Add(1)

@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -271,10 +269,6 @@ func TestRunServiceTimesOutWhenWorkerIgnoresCancellation(t *testing.T) {
 	if !errors.Is(err, errRuntimeShutdownTimeout) {
 		t.Fatalf("期望返回退出超时错误，实际为 %v", err)
 	}
-}
-
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 type stubRunner struct {

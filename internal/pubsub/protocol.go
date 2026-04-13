@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
 	"sort"
 	"time"
 )
@@ -87,15 +85,6 @@ func chunkStrings(values []string, size int) [][]string {
 	}
 
 	return chunks
-}
-
-func isTimeoutError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var netError net.Error
-	return errors.As(err, &netError) && netError.Timeout()
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {

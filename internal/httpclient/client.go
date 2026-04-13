@@ -335,7 +335,9 @@ func readResponse(httpResponse *http.Response) (Response, error) {
 	if httpResponse == nil {
 		return Response{}, fmt.Errorf("响应为空")
 	}
-	defer httpResponse.Body.Close()
+	defer func() {
+		_ = httpResponse.Body.Close()
+	}()
 
 	body, err := io.ReadAll(httpResponse.Body)
 	if err != nil {

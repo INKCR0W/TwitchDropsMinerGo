@@ -123,8 +123,7 @@ func TestWatchLoopSkipsFallbackWhenProgressUpdatedAfterSend(t *testing.T) {
 	})
 
 	currentDropCalls := 0
-	var scheduler *Scheduler
-	scheduler = newTestScheduler(t, testSchedulerOptions{
+	scheduler := newTestScheduler(t, testSchedulerOptions{
 		tracker: tracker,
 		gqlClient: &fakeGQLClient{
 			doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {

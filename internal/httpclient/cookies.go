@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -369,20 +368,4 @@ func (j *PersistentJar) rebuildLocked() error {
 
 	j.jar = jar
 	return nil
-}
-
-func cookiePathOrDefault(value string) string {
-	if value == "" {
-		return "/"
-	}
-
-	cleaned := path.Clean(value)
-	if cleaned == "." {
-		return "/"
-	}
-	if cleaned[0] != '/' {
-		return "/" + cleaned
-	}
-
-	return cleaned
 }

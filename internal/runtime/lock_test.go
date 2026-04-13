@@ -77,7 +77,9 @@ func lockHelperProcess() {
 	if err != nil {
 		os.Exit(2)
 	}
-	defer lock.Close()
+	defer func() {
+		_ = lock.Close()
+	}()
 
 	if err := os.WriteFile(readyPath, []byte("ready"), 0o644); err != nil {
 		os.Exit(3)
