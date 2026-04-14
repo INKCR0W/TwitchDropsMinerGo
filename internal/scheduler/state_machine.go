@@ -216,6 +216,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 	aclChannels := make(map[int64]domain.Channel)
 	noACLGames := make(map[string]domain.Game)
 
+	earnableFound := false
 	for _, campaign := range snapshot.Inventory {
 		if campaign == nil ||
 			!gameInList(campaign.Game, wantedGames) ||
@@ -223,6 +224,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 			continue
 		}
 
+		earnableFound = true
 		if len(campaign.AllowedChannels) > 0 {
 			for _, channel := range campaign.AllowedChannels {
 				if _, exists := newChannels[channel.ID]; exists {
@@ -233,6 +235,14 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 			continue
 		}
 		noACLGames[gameKey(campaign.Game)] = campaign.Game
+	}
+
+	if !earnableFound {
+		s.logger.Info(
+			"当前没有可推进的活动匹配规划游戏",
+			"wanted_game_count", len(wantedGames),
+			"wanted_games", formatGameNames(wantedGames),
+		)
 	}
 
 	if len(aclChannels) > 0 {
@@ -276,6 +286,20 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 		ordered = append(ordered, channel)
 	}
 	s.sortChannelsByPriority(ordered, wantedGames)
+
+	onlineCount := 0
+	for _, channel := range ordered {
+		if channel.Online() {
+			onlineCount++
+		}
+	}
+	directoryCount := 0
+	for _, channel := range ordered {
+		if !channel.ACLBased {
+			directoryCount++
+		}
+	}
+	s.logChannelsFetchSummary(len(aclChannels), directoryCount, len(ordered), onlineCount)
 
 	limit := min(len(ordered), s.maxChannels)
 	desired := make(map[int64]domain.Channel, limit)
@@ -366,6 +390,7 @@ func (s *Scheduler) handleChannelSwitch() {
 		return
 	}
 
+	s.logNoWatchableChannel(channels)
 	s.ChangeState(StateIdle)
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -342,4 +343,29 @@ func campaignSpecWithDrop(id string, game domain.Game, startsAt time.Time, endsA
 
 func testTime() time.Time {
 	return time.Date(2026, 4, 11, 8, 0, 0, 0, time.UTC)
+}
+
+type logBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *logBuffer) logger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(&logSyncWriter{b: b}, nil))
+}
+
+func (b *logBuffer) contains(substr string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Contains(b.buf.String(), substr)
+}
+
+type logSyncWriter struct {
+	b *logBuffer
+}
+
+func (w *logSyncWriter) Write(p []byte) (int, error) {
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	return w.b.buf.Write(p)
 }

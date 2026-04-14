@@ -227,3 +227,39 @@ func TestHandleChannelSwitchHonorsSelectionAndPriority(t *testing.T) {
 		t.Fatalf("高优先级游戏频道应接管观看: %d", got)
 	}
 }
+
+func TestHandleChannelSwitchLogsNoWatchableAndGoesIdle(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "ACL Game"}
+
+	var logBuf logBuffer
+	logger := logBuf.logger()
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		logger: logger,
+	})
+	scheduler.state = StateChannelSwitch
+	scheduler.wantedGames = []domain.Game{game}
+	scheduler.snapshot = snapshotFromCampaigns(
+		mustCampaign(t, campaignSpec(now, "campaign-acl", game, now.Add(-time.Hour), now.Add(time.Hour), nil)),
+	)
+	// All channels are offline — no Stream set.
+	scheduler.channels = map[int64]domain.Channel{
+		10: {ID: 10, Login: "offline-a", ACLBased: true},
+		20: {ID: 20, Login: "offline-b", ACLBased: true},
+	}
+
+	scheduler.handleChannelSwitch()
+
+	if scheduler.State() != StateIdle {
+		t.Fatalf("无可观看频道时应进入 IDLE: %s", scheduler.State())
+	}
+	if got := scheduler.WatchingChannelID(); got != 0 {
+		t.Fatalf("无可观看频道时不应有 watching channel: %d", got)
+	}
+	if !logBuf.contains("当前没有可观看的频道") {
+		t.Fatal("应输出无可观看频道的诊断日志")
+	}
+}

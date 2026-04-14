@@ -20,6 +20,49 @@ func (s *Scheduler) logWantedGamesUpdate(previous []domain.Game, current []domai
 	}
 }
 
+func (s *Scheduler) logNoWatchableChannel(channels []domain.Channel) {
+	if s == nil {
+		return
+	}
+
+	total := len(channels)
+	online := 0
+	offline := 0
+	pending := 0
+	for _, ch := range channels {
+		switch {
+		case ch.Online():
+			online++
+		case ch.PendingOnline():
+			pending++
+		default:
+			offline++
+		}
+	}
+
+	s.logger.Info(
+		"当前没有可观看的频道",
+		"channel_count", total,
+		"online", online,
+		"offline", offline,
+		"pending", pending,
+	)
+}
+
+func (s *Scheduler) logChannelsFetchSummary(aclCount int, directoryCount int, totalCount int, onlineCount int) {
+	if s == nil {
+		return
+	}
+
+	s.logger.Info(
+		"频道抓取完成",
+		"acl_channel_count", aclCount,
+		"directory_channel_count", directoryCount,
+		"total_channel_count", totalCount,
+		"online_channel_count", onlineCount,
+	)
+}
+
 func watchingLogAttrs(channel domain.Channel) []any {
 	attrs := []any{
 		"channel_id", channel.ID,
