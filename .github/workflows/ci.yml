@@ -193,15 +193,16 @@ jobs:
 
           archive_name="${{ needs.prepare.outputs.artifact_prefix }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           package_dir="dist/package/${{ matrix.goos }}-${{ matrix.goarch }}"
+          cp LICENSE README.md "$package_dir/"
 
           if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
             (
               cd "$package_dir"
-              zip -q -9 "../../${archive_name}.zip" "${{ matrix.binary_name }}"
+              zip -q -9 "../../${archive_name}.zip" "${{ matrix.binary_name }}" LICENSE README.md
             )
             archive_path="dist/${archive_name}.zip"
           else
-            tar -C "$package_dir" -czf "dist/${archive_name}.tar.gz" "${{ matrix.binary_name }}"
+            tar -C "$package_dir" -czf "dist/${archive_name}.tar.gz" "${{ matrix.binary_name }}" LICENSE README.md
             archive_path="dist/${archive_name}.tar.gz"
           fi
 
