@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,5 +244,29 @@ func TestSyncChannelsUsesBatchAndHandlesOfflineChannels(t *testing.T) {
 	}
 	if second.Stream != nil {
 		t.Fatalf("离线频道不应保留 stream: %#v", second.Stream)
+	}
+}
+
+func TestSyncChannelsRejectsExtraBatchResponses(t *testing.T) {
+	t.Parallel()
+
+	fakeGQL := &fakeGQLClient{
+		doBatchFunc: func(ctx context.Context, operations []gql.Operation) ([]gql.Response, error) {
+			return []gql.Response{
+				{Data: map[string]any{"user": nil}},
+				{Data: map[string]any{"user": nil}},
+			}, nil
+		},
+	}
+
+	tracker := newTestTracker(t, testTrackerOptions{gqlClient: fakeGQL})
+	tracker.AddChannel(domain.Channel{ID: 1, Login: "one"})
+
+	err := tracker.SyncChannels(context.Background(), 1)
+	if err == nil {
+		t.Fatal("额外 batch response 应返回错误")
+	}
+	if !strings.Contains(err.Error(), "响应数量不匹配") {
+		t.Fatalf("错误信息不匹配: %v", err)
 	}
 }

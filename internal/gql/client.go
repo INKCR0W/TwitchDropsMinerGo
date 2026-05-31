@@ -155,6 +155,14 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var operations []Operation
+	if !single {
+		var ok bool
+		operations, ok = payload.([]Operation)
+		if !ok {
+			return nil, fmt.Errorf("GQL batch 请求类型不正确: %T", payload)
+		}
+	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -198,6 +206,9 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 			if err := json.Unmarshal(response.Body, &responses); err != nil {
 				return nil, fmt.Errorf("解析 GQL 响应失败: %w", err)
 			}
+			if err := validateBatchResponses(operations, responses); err != nil {
+				return nil, err
+			}
 		}
 
 		retry, consumeSingleRetry, minimumDelay, err := handleResponses(responses, allowSingleRetry)
@@ -219,6 +230,21 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 			return nil, err
 		}
 	}
+}
+
+func validateBatchResponses(operations []Operation, responses []Response) error {
+	if len(responses) != len(operations) {
+		return fmt.Errorf("GQL batch 响应数量不匹配: 请求 %d 个，响应 %d 个", len(operations), len(responses))
+	}
+	for index := range responses {
+		got := operationName(responses[index])
+		want := operations[index].OperationName
+		if got != "" && want != "" && got != want {
+			return fmt.Errorf("GQL batch operationName 不匹配: index=%d want=%q got=%q", index, want, got)
+		}
+	}
+
+	return nil
 }
 
 func (c *Client) buildHeaders(ctx context.Context) (http.Header, error) {

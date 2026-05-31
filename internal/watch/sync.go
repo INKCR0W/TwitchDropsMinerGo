@@ -63,6 +63,9 @@ func (t *Tracker) SyncChannels(ctx context.Context, channelIDs ...int64) error {
 		if err != nil {
 			return fmt.Errorf("批量请求 GetStreamInfo 失败: %w", err)
 		}
+		if len(responses) != len(operations) {
+			return fmt.Errorf("GetStreamInfo batch 响应数量不匹配: 请求 %d 个，响应 %d 个", len(operations), len(responses))
+		}
 
 		pendingDrops := make([]channelSpec, 0, len(chunk))
 		for index, response := range responses {
@@ -265,6 +268,9 @@ func (t *Tracker) fillDropsEnabledBatch(ctx context.Context, specs []channelSpec
 	responses, err := t.gqlClient.DoBatch(ctx, operations)
 	if err != nil {
 		return fmt.Errorf("批量请求 AvailableDrops 失败: %w", err)
+	}
+	if len(responses) != len(operations) {
+		return fmt.Errorf("AvailableDrops batch 响应数量不匹配: 请求 %d 个，响应 %d 个", len(operations), len(responses))
 	}
 
 	for index, response := range responses {
