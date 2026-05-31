@@ -71,6 +71,7 @@ type Tracker struct {
 	settings  config.Settings
 	inventory inventory.Snapshot
 	channels  map[int64]*trackedChannel
+	epochs    map[int64]uint64
 	onChange  func(before, after domain.Channel)
 	wg        sync.WaitGroup
 }
@@ -78,6 +79,7 @@ type Tracker struct {
 type trackedChannel struct {
 	channel       *domain.Channel
 	spadeURL      string
+	epoch         uint64
 	pendingSeq    uint64
 	pendingCancel context.CancelFunc
 }
@@ -87,6 +89,7 @@ type channelSpec struct {
 	Login       string
 	DisplayName string
 	ACLBased    bool
+	Epoch       uint64
 }
 
 type fetchedChannel struct {
@@ -149,6 +152,7 @@ func NewTracker(options Options) (*Tracker, error) {
 		cancel:      cancel,
 		settings:    config.DefaultSettings(),
 		channels:    make(map[int64]*trackedChannel),
+		epochs:      make(map[int64]uint64),
 	}, nil
 }
 
@@ -229,12 +233,16 @@ func (t *Tracker) AddChannel(channel domain.Channel) {
 		if !cloned.PendingStream {
 			cloned.PendingStream = existing.channel.PendingStream
 		}
+		existing.epoch++
+		t.epochs[channel.ID] = existing.epoch
 		existing.channel = &cloned
 		return
 	}
 
+	epoch := t.epochs[channel.ID]
 	t.channels[channel.ID] = &trackedChannel{
 		channel: &cloned,
+		epoch:   epoch,
 	}
 }
 
@@ -253,6 +261,8 @@ func (t *Tracker) RemoveChannel(channelID int64) {
 	if tracked.pendingCancel != nil {
 		tracked.pendingCancel()
 	}
+	tracked.epoch++
+	t.epochs[channelID] = tracked.epoch
 	delete(t.channels, channelID)
 }
 
@@ -324,7 +334,7 @@ func (t *Tracker) ProcessStreamUpdate(ctx context.Context, channelID int64, mess
 	return t.CheckOnline(channelID)
 }
 
-func (t *Tracker) applyFetched(channelID int64, fetched fetchedChannel) {
+func (t *Tracker) applyFetched(channelID int64, expectedEpoch uint64, fetched fetchedChannel) {
 	var (
 		before  domain.Channel
 		after   domain.Channel
@@ -342,6 +352,9 @@ func (t *Tracker) applyFetched(channelID int64, fetched fetchedChannel) {
 
 	tracked, ok := t.channels[channelID]
 	if !ok || tracked == nil || tracked.channel == nil {
+		return
+	}
+	if tracked.epoch != expectedEpoch {
 		return
 	}
 	before = cloneChannel(tracked.channel)
@@ -382,6 +395,8 @@ func (t *Tracker) setOffline(channelID int64) {
 		return
 	}
 	before = cloneChannel(tracked.channel)
+	tracked.epoch++
+	t.epochs[channelID] = tracked.epoch
 	if tracked.pendingCancel != nil {
 		tracked.pendingCancel()
 		tracked.pendingCancel = nil

@@ -21,12 +21,16 @@ func (t *Tracker) SyncChannel(ctx context.Context, channelID int64) (bool, error
 		return false, err
 	}
 
+	return t.syncFetchedChannel(ctx, spec, settings, snapshot)
+}
+
+func (t *Tracker) syncFetchedChannel(ctx context.Context, spec channelSpec, settings config.Settings, snapshot inventory.Snapshot) (bool, error) {
 	fetched, err := t.fetchChannel(ctx, spec, settings, snapshot)
 	if err != nil {
 		return false, err
 	}
 
-	t.applyFetched(channelID, fetched)
+	t.applyFetched(spec.ID, spec.Epoch, fetched)
 	return fetched.Stream != nil, nil
 }
 
@@ -91,7 +95,7 @@ func (t *Tracker) SyncChannels(ctx context.Context, channelIDs ...int64) error {
 		if !ok {
 			continue
 		}
-		t.applyFetched(spec.ID, result)
+		t.applyFetched(spec.ID, spec.Epoch, result)
 	}
 
 	return nil
@@ -128,6 +132,12 @@ func (t *Tracker) CheckOnline(channelID int64) error {
 			return
 		}
 
+		var (
+			spec     channelSpec
+			settings config.Settings
+			snapshot inventory.Snapshot
+		)
+
 		t.mu.Lock()
 		tracked, ok := t.channels[channelID]
 		if !ok || tracked == nil || tracked.channel == nil || tracked.pendingCancel == nil || tracked.pendingSeq != sequence {
@@ -136,9 +146,18 @@ func (t *Tracker) CheckOnline(channelID int64) error {
 		}
 		tracked.pendingCancel = nil
 		tracked.channel.PendingStream = false
+		spec = channelSpec{
+			ID:          tracked.channel.ID,
+			Login:       tracked.channel.Login,
+			DisplayName: tracked.channel.DisplayName,
+			ACLBased:    tracked.channel.ACLBased,
+			Epoch:       tracked.epoch,
+		}
+		settings = t.settings
+		snapshot = t.inventory
 		t.mu.Unlock()
 
-		_, _ = t.SyncChannel(t.ctx, channelID)
+		_, _ = t.syncFetchedChannel(t.ctx, spec, settings, snapshot)
 	}()
 
 	return nil
@@ -158,6 +177,7 @@ func (t *Tracker) lookupChannel(channelID int64) (channelSpec, config.Settings, 
 		Login:       tracked.channel.Login,
 		DisplayName: tracked.channel.DisplayName,
 		ACLBased:    tracked.channel.ACLBased,
+		Epoch:       tracked.epoch,
 	}, t.settings, t.inventory, nil
 }
 
@@ -178,6 +198,7 @@ func (t *Tracker) collectChannels(channelIDs []int64) ([]channelSpec, config.Set
 				Login:       tracked.channel.Login,
 				DisplayName: tracked.channel.DisplayName,
 				ACLBased:    tracked.channel.ACLBased,
+				Epoch:       tracked.epoch,
 			})
 		}
 		return specs, settings, snapshot, nil
@@ -194,6 +215,7 @@ func (t *Tracker) collectChannels(channelIDs []int64) ([]channelSpec, config.Set
 			Login:       tracked.channel.Login,
 			DisplayName: tracked.channel.DisplayName,
 			ACLBased:    tracked.channel.ACLBased,
+			Epoch:       tracked.epoch,
 		})
 	}
 	return specs, settings, snapshot, nil

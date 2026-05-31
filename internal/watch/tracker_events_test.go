@@ -120,6 +120,137 @@ func TestProcessStreamEventsHonorOnlineDelayAndStatusTransitions(t *testing.T) {
 	}
 }
 
+func TestCheckOnlineResultDoesNotOverwriteLaterStreamDown(t *testing.T) {
+	t.Parallel()
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	fakeGQL := &fakeGQLClient{
+		doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
+			close(fetchStarted)
+			<-releaseFetch
+			return gql.Response{
+				Data: map[string]any{
+					"user": map[string]any{
+						"id":          "100",
+						"displayName": "Streamer",
+						"stream": map[string]any{
+							"id":           "321",
+							"viewersCount": 10,
+						},
+						"broadcastSettings": map[string]any{
+							"title": "Live",
+							"game": map[string]any{
+								"id":          "7",
+								"displayName": "Game",
+							},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	tracker := newTestTracker(t, testTrackerOptions{
+		gqlClient:   fakeGQL,
+		onlineDelay: time.Millisecond,
+	})
+	tracker.AddChannel(domain.Channel{ID: 100, Login: "streamer"})
+
+	if err := tracker.ProcessStreamState(context.Background(), 100, json.RawMessage(`{"type":"stream-up"}`)); err != nil {
+		t.Fatalf("stream-up 返回错误: %v", err)
+	}
+	select {
+	case <-fetchStarted:
+	case <-time.After(time.Second):
+		t.Fatal("SyncChannel 未开始")
+	}
+
+	if err := tracker.ProcessStreamState(context.Background(), 100, json.RawMessage(`{"type":"stream-down"}`)); err != nil {
+		t.Fatalf("stream-down 返回错误: %v", err)
+	}
+	close(releaseFetch)
+	if err := tracker.Close(context.Background()); err != nil {
+		t.Fatalf("关闭 tracker 返回错误: %v", err)
+	}
+
+	channel, ok := tracker.Channel(100)
+	if !ok {
+		t.Fatal("频道应仍被跟踪")
+	}
+	if channel.Online() {
+		t.Fatalf("旧 online sync 不应覆盖 stream-down: %#v", channel.Stream)
+	}
+}
+
+func TestStaleSyncResultDoesNotOverwriteReaddedChannel(t *testing.T) {
+	t.Parallel()
+
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	fakeGQL := &fakeGQLClient{
+		doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
+			close(fetchStarted)
+			<-releaseFetch
+			return gql.Response{
+				Data: map[string]any{
+					"user": map[string]any{
+						"id":          "101",
+						"displayName": "OldStreamer",
+						"stream": map[string]any{
+							"id":           "654",
+							"viewersCount": 10,
+						},
+						"broadcastSettings": map[string]any{
+							"title": "Old Live",
+							"game": map[string]any{
+								"id":          "7",
+								"displayName": "Game",
+							},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	tracker := newTestTracker(t, testTrackerOptions{gqlClient: fakeGQL})
+	tracker.AddChannel(domain.Channel{ID: 101, Login: "old-streamer"})
+
+	syncDone := make(chan error, 1)
+	go func() {
+		_, err := tracker.SyncChannel(context.Background(), 101)
+		syncDone <- err
+	}()
+
+	select {
+	case <-fetchStarted:
+	case <-time.After(time.Second):
+		t.Fatal("SyncChannel 未开始")
+	}
+
+	tracker.RemoveChannel(101)
+	tracker.AddChannel(domain.Channel{ID: 101, Login: "new-streamer", DisplayName: "NewStreamer"})
+
+	close(releaseFetch)
+	select {
+	case err := <-syncDone:
+		if err != nil {
+			t.Fatalf("SyncChannel 返回错误: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SyncChannel 未结束")
+	}
+
+	channel, ok := tracker.Channel(101)
+	if !ok {
+		t.Fatal("重新添加的频道应仍被跟踪")
+	}
+	if channel.Online() || channel.DisplayName != "NewStreamer" {
+		t.Fatalf("旧 sync 不应覆盖重新添加的频道: %#v", channel)
+	}
+}
+
 func TestTrackerNotifiesChannelChangeHandler(t *testing.T) {
 	t.Parallel()
 
