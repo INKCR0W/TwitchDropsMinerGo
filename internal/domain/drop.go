@@ -285,3 +285,12 @@ func (d *TimedDrop) BumpMinutes(now time.Time, channel *Channel, enableBadgesEmo
 	d.ExtraCurrentMinutes++
 	return d.ExtraCurrentMinutes >= MaxExtraMinutes
 }
+
+func (d *TimedDrop) BumpMinutesUntilRequired(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
+	if d == nil || d.CurrentMinutes() >= d.RequiredMinutes || !d.CanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
+		return false
+	}
+
+	d.ExtraCurrentMinutes++
+	return d.CurrentMinutes() >= d.RequiredMinutes
+}

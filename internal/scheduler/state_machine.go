@@ -97,6 +97,7 @@ func (s *Scheduler) handleIdle() {
 func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	s.logger.Info("开始刷新 inventory")
 
+	s.syncRewardProgressToRefresher()
 	if err := s.pubsub.Start(ctx); err != nil {
 		return fmt.Errorf("启动 PubSub 失败: %w", err)
 	}
@@ -131,6 +132,17 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	s.restartMaintenance(ctx, snapshot.MaintenanceTriggers)
 	s.ChangeState(StateGamesUpdate)
 	return nil
+}
+
+func (s *Scheduler) syncRewardProgressToRefresher() {
+	if s == nil || s.rewardProgress == nil {
+		return
+	}
+	aware, ok := s.refresher.(rewardProgressAwareRefresher)
+	if !ok {
+		return
+	}
+	aware.UpdateRewardProgress(s.rewardProgress.Snapshot())
 }
 
 func (s *Scheduler) handleGamesUpdate(ctx context.Context) error {

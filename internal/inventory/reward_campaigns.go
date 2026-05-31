@@ -20,6 +20,10 @@ var rewardCampaignKeys = []string{
 }
 
 func rewardCampaignToDropCampaign(data map[string]any, now time.Time) (map[string]any, bool, error) {
+	return rewardCampaignToDropCampaignWithProgress(data, now, 0)
+}
+
+func rewardCampaignToDropCampaignWithProgress(data map[string]any, now time.Time, currentMinutes int) (map[string]any, bool, error) {
 	if len(data) == 0 {
 		return nil, false, nil
 	}
@@ -66,6 +70,39 @@ func rewardCampaignToDropCampaign(data map[string]any, now time.Time) (map[strin
 
 	unlockRequirements := optionalMap(data["unlockRequirements"])
 	requiredMinutes := intValue(unlockRequirements, "minuteWatchedGoal")
+	if currentMinutes < 0 {
+		currentMinutes = 0
+	}
+	if requiredMinutes > 0 && currentMinutes > requiredMinutes {
+		currentMinutes = requiredMinutes
+	}
+
+	dropSelf := map[string]any{}
+	if currentMinutes > 0 {
+		dropSelf["currentMinutesWatched"] = currentMinutes
+	}
+
+	drop := map[string]any{
+		"id":                     rewardCampaignIDPrefix + rewardID,
+		"name":                   rewardName,
+		"startAt":                startsAt,
+		"endAt":                  endsAt,
+		"requiredMinutesWatched": requiredMinutes,
+		"preconditionDrops":      []any{},
+		"benefitEdges": []any{
+			map[string]any{
+				"benefit": map[string]any{
+					"id":               rewardID,
+					"name":             rewardName,
+					"distributionType": string(domain.BenefitTypeDirectEntitlement),
+					"imageAssetURL":    firstRewardImageURL(reward),
+				},
+			},
+		},
+	}
+	if len(dropSelf) > 0 {
+		drop["self"] = dropSelf
+	}
 
 	return map[string]any{
 		"id":               rewardCampaignIDPrefix + campaignID,
@@ -81,26 +118,7 @@ func rewardCampaignToDropCampaign(data map[string]any, now time.Time) (map[strin
 			"isEnabled": false,
 			"channels":  []any{},
 		},
-		"timeBasedDrops": []any{
-			map[string]any{
-				"id":                     rewardCampaignIDPrefix + rewardID,
-				"name":                   rewardName,
-				"startAt":                startsAt,
-				"endAt":                  endsAt,
-				"requiredMinutesWatched": requiredMinutes,
-				"preconditionDrops":      []any{},
-				"benefitEdges": []any{
-					map[string]any{
-						"benefit": map[string]any{
-							"id":               rewardID,
-							"name":             rewardName,
-							"distributionType": string(domain.BenefitTypeDirectEntitlement),
-							"imageAssetURL":    firstRewardImageURL(reward),
-						},
-					},
-				},
-			},
-		},
+		"timeBasedDrops": []any{drop},
 	}, true, nil
 }
 

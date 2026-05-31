@@ -206,3 +206,85 @@ func TestResolveProgressRequestsSwitchWhenExtraMinutesHitLimit(t *testing.T) {
 		t.Fatalf("达到 extra minutes 上限后应请求切台: %s", scheduler.State())
 	}
 }
+
+func TestResolveProgressCompletesRewardCampaignWithoutCurrentDrop(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 27471, Name: "Minecraft"}
+	campaign := mustCampaign(t, domain.CampaignSpec{
+		ID:               "reward:builder-cape",
+		Name:             "Builder Cape",
+		Game:             game,
+		Linked:           true,
+		Status:           "ACTIVE",
+		IsRewardCampaign: true,
+		StartsAt:         now.Add(-time.Hour),
+		EndsAt:           now.Add(time.Hour),
+		LinkURL:          "https://www.minecraft.net/redeem",
+		Drops: []domain.TimedDropSpec{
+			{
+				ID:                  "reward:builder-cape-drop",
+				Name:                "Builder Cape",
+				StartsAt:            now.Add(-time.Hour),
+				EndsAt:              now.Add(time.Hour),
+				RequiredMinutes:     5,
+				ExtraCurrentMinutes: 4,
+				Benefits: []domain.Benefit{
+					{ID: "builder-cape-benefit", Name: "Builder Cape", Type: domain.BenefitTypeDirectEntitlement},
+				},
+			},
+		},
+	})
+	progressStore := &fakeRewardProgressStore{}
+	refresher := &fakeRefresher{}
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		refresher:      refresher,
+		rewardProgress: progressStore,
+		gqlClient: &fakeGQLClient{
+			doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
+				return gql.Response{
+					Data: map[string]any{
+						"currentUser": map[string]any{
+							"dropCurrentSession": nil,
+						},
+					},
+				}, nil
+			},
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+	scheduler.wantedGames = []domain.Game{game}
+	channel := domain.Channel{
+		ID:    1,
+		Login: "minecraft-channel",
+		Stream: &domain.Stream{
+			BroadcastID:  1,
+			Game:         &game,
+			DropsEnabled: false,
+		},
+	}
+
+	if err := scheduler.resolveProgress(context.Background(), channel); err != nil {
+		t.Fatalf("resolveProgress 返回错误: %v", err)
+	}
+	if scheduler.State() != StateInventoryFetch {
+		t.Fatalf("reward campaign 完成后应刷新 inventory: %s", scheduler.State())
+	}
+	record, ok := progressStore.lastRecord()
+	if !ok {
+		t.Fatal("reward campaign 完成后应写入本地完成状态")
+	}
+	if record.CampaignID != "reward:builder-cape" || record.DropID != "reward:builder-cape-drop" || record.MinutesWatched != 5 || record.CompletedAt.IsZero() {
+		t.Fatalf("reward 完成记录不匹配: %#v", record)
+	}
+	if drop := campaign.Drop("reward:builder-cape-drop"); drop == nil || !drop.IsClaimed {
+		t.Fatalf("完成后的 reward drop 应在内存快照中标记为 claimed: %#v", drop)
+	}
+	if refresher.updateCallCount != 1 {
+		t.Fatalf("reward 完成后应同步进度给 refresher: %d", refresher.updateCallCount)
+	}
+	if _, ok := refresher.rewardProgress["reward:builder-cape"]; !ok {
+		t.Fatalf("refresher 未收到 reward 完成快照: %#v", refresher.rewardProgress)
+	}
+}

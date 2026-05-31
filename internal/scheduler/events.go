@@ -307,9 +307,9 @@ func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dr
 	return true
 }
 
-func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (bool, bool) {
+func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (bool, bool, bool) {
 	if channel == nil {
-		return false, false
+		return false, false, false
 	}
 
 	s.mu.Lock()
@@ -317,12 +317,52 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 
 	activeCampaign := s.activeCampaignLocked(now, channel)
 	if activeCampaign == nil {
-		return false, false
+		return false, false, false
+	}
+	if activeCampaign.IsRewardCampaign {
+		completed := activeCampaign.BumpRewardMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
+		s.lastProgressAt = now.UTC()
+		if completed {
+			s.recordRewardCompletedLocked(activeCampaign, now)
+		}
+		return completed, false, true
 	}
 
 	reachedLimit := activeCampaign.BumpMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
 	s.lastProgressAt = now.UTC()
-	return reachedLimit, true
+	return false, reachedLimit, true
+}
+
+func (s *Scheduler) recordRewardCompletedLocked(campaign *domain.DropsCampaign, now time.Time) {
+	if s == nil || s.rewardProgress == nil || campaign == nil || !campaign.IsRewardCampaign {
+		return
+	}
+
+	var saved bool
+	for _, drop := range campaign.Drops() {
+		if drop == nil || drop.CurrentMinutes() < drop.RequiredMinutes {
+			continue
+		}
+		if _, err := s.rewardProgress.RecordProgress(campaign.ID, drop.ID, drop.CurrentMinutes(), true, now); err != nil {
+			s.logger.Warn("保存 reward campaign 完成状态失败", "campaign_id", campaign.ID, "drop_id", drop.ID, "error", err)
+			continue
+		}
+		saved = true
+		drop.MarkClaimed()
+		s.logger.Info(
+			"reward campaign 已达到所需观看时间，请到兑换页面领取",
+			"campaign_id", campaign.ID,
+			"drop_id", drop.ID,
+			"reward", drop.Name,
+			"redeem_url", campaign.LinkURL,
+		)
+	}
+	if !saved {
+		return
+	}
+	if aware, ok := s.refresher.(rewardProgressAwareRefresher); ok {
+		aware.UpdateRewardProgress(s.rewardProgress.Snapshot())
+	}
 }
 
 func (s *Scheduler) updateDropClaim(dropID string, claimID string) (string, string, bool) {

@@ -124,8 +124,12 @@ func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel)
 		return nil
 	}
 
-	reachedLimit, updated := s.bumpActiveCampaign(now, &channel)
+	completedReward, reachedLimit, updated := s.bumpActiveCampaign(now, &channel)
 	if !updated {
+		return nil
+	}
+	if completedReward {
+		s.ChangeState(StateInventoryFetch)
 		return nil
 	}
 	if reachedLimit {

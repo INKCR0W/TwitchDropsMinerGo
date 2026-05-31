@@ -15,6 +15,7 @@ import (
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/inventory"
 	"twitchdropsminergo/internal/pubsub"
+	"twitchdropsminergo/internal/rewards"
 )
 
 type testSchedulerOptions struct {
@@ -25,6 +26,7 @@ type testSchedulerOptions struct {
 	pubsub            *fakePubSub
 	gqlClient         GQLClient
 	authState         AuthState
+	rewardProgress    RewardProgressStore
 	now               func() time.Time
 	sleep             func(context.Context, time.Duration) error
 	watchInterval     time.Duration
@@ -75,6 +77,7 @@ func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
 		PubSub:            pubsubManager,
 		GQLClient:         gqlClient,
 		AuthState:         authState,
+		RewardProgress:    options.rewardProgress,
 		Clock:             now,
 		Sleep:             options.sleep,
 		WatchInterval:     options.watchInterval,
@@ -98,7 +101,9 @@ func trackerPubSubKeys(s *Scheduler) []string {
 }
 
 type fakeRefresher struct {
-	refreshFunc func(context.Context, inventory.RefreshOptions) (inventory.Snapshot, error)
+	refreshFunc     func(context.Context, inventory.RefreshOptions) (inventory.Snapshot, error)
+	rewardProgress  map[string]rewards.Progress
+	updateCallCount int
 }
 
 func (f *fakeRefresher) Refresh(ctx context.Context, options inventory.RefreshOptions) (inventory.Snapshot, error) {
@@ -106,6 +111,11 @@ func (f *fakeRefresher) Refresh(ctx context.Context, options inventory.RefreshOp
 		return inventory.Snapshot{}, nil
 	}
 	return f.refreshFunc(ctx, options)
+}
+
+func (f *fakeRefresher) UpdateRewardProgress(progress map[string]rewards.Progress) {
+	f.rewardProgress = progress
+	f.updateCallCount++
 }
 
 type fakeTracker struct {
@@ -274,6 +284,62 @@ type fakeAuthState struct {
 
 func (f *fakeAuthState) Snapshot() auth.Snapshot {
 	return f.snapshot
+}
+
+type fakeRewardProgressStore struct {
+	mu       sync.Mutex
+	progress map[string]rewards.Progress
+	records  []rewards.Progress
+	err      error
+}
+
+func (f *fakeRewardProgressStore) Snapshot() map[string]rewards.Progress {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if len(f.progress) == 0 {
+		return nil
+	}
+	cloned := make(map[string]rewards.Progress, len(f.progress))
+	for key, value := range f.progress {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (f *fakeRewardProgressStore) RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (rewards.Progress, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.err != nil {
+		return rewards.Progress{}, f.err
+	}
+	if f.progress == nil {
+		f.progress = make(map[string]rewards.Progress)
+	}
+	progress := f.progress[campaignID]
+	progress.CampaignID = campaignID
+	progress.DropID = dropID
+	if minutesWatched > progress.MinutesWatched {
+		progress.MinutesWatched = minutesWatched
+	}
+	if completed && progress.CompletedAt.IsZero() {
+		progress.CompletedAt = now.UTC()
+	}
+	progress.UpdatedAt = now.UTC()
+	f.progress[campaignID] = progress
+	f.records = append(f.records, progress)
+	return progress, nil
+}
+
+func (f *fakeRewardProgressStore) lastRecord() (rewards.Progress, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if len(f.records) == 0 {
+		return rewards.Progress{}, false
+	}
+	return f.records[len(f.records)-1], true
 }
 
 func mustCampaign(t *testing.T, spec domain.CampaignSpec) *domain.DropsCampaign {

@@ -21,6 +21,7 @@ import (
 	"twitchdropsminergo/internal/inventory"
 	"twitchdropsminergo/internal/logging"
 	"twitchdropsminergo/internal/pubsub"
+	"twitchdropsminergo/internal/rewards"
 	"twitchdropsminergo/internal/runtime"
 	"twitchdropsminergo/internal/scheduler"
 	"twitchdropsminergo/internal/storage"
@@ -157,9 +158,15 @@ func run(args []string) int {
 		return failRun(application, logger, "初始化 GQL 客户端失败", err)
 	}
 
+	rewardProgress, err := rewards.NewFileStore(layout.RewardsFile)
+	if err != nil {
+		return failRun(application, logger, "初始化 reward 进度存储失败", err)
+	}
+
 	refresher, err := inventory.NewRefresher(inventory.Options{
-		GQLClient: gqlClient,
-		AuthState: authState,
+		GQLClient:      gqlClient,
+		AuthState:      authState,
+		RewardProgress: rewardProgress.Snapshot(),
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 inventory 刷新器失败", err)
@@ -188,13 +195,14 @@ func run(args []string) int {
 	}
 
 	schedulerInstance, err := scheduler.New(scheduler.Options{
-		Logger:    logger,
-		Settings:  application.Settings(),
-		Refresher: refresher,
-		Tracker:   tracker,
-		PubSub:    pubsubManager,
-		GQLClient: gqlClient,
-		AuthState: authState,
+		Logger:         logger,
+		Settings:       application.Settings(),
+		Refresher:      refresher,
+		Tracker:        tracker,
+		PubSub:         pubsubManager,
+		GQLClient:      gqlClient,
+		AuthState:      authState,
+		RewardProgress: rewardProgress,
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化调度器失败", err)
@@ -206,6 +214,7 @@ func run(args []string) int {
 		"settings_file", layout.SettingsFile,
 		"state_file", layout.StateFile,
 		"cookies_file", layout.CookiesFile,
+		"rewards_file", layout.RewardsFile,
 		"log_file", layout.LogFile,
 		"state_observer", "enabled",
 	)

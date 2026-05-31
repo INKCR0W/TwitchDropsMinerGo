@@ -8,6 +8,7 @@ import (
 	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
+	"twitchdropsminergo/internal/rewards"
 )
 
 const defaultChunkSize = 20
@@ -23,10 +24,11 @@ type AuthState interface {
 }
 
 type Options struct {
-	GQLClient GQLClient
-	AuthState AuthState
-	Clock     func() time.Time
-	ChunkSize int
+	GQLClient      GQLClient
+	AuthState      AuthState
+	RewardProgress map[string]rewards.Progress
+	Clock          func() time.Time
+	ChunkSize      int
 }
 
 type RefreshOptions struct {
@@ -41,10 +43,12 @@ type Snapshot struct {
 }
 
 type Refresher struct {
-	gqlClient GQLClient
-	authState AuthState
-	now       func() time.Time
-	chunkSize int
+	gqlClient             GQLClient
+	authState             AuthState
+	completedRewardIDs    map[string]struct{}
+	rewardProgressMinutes map[string]int
+	now                   func() time.Time
+	chunkSize             int
 }
 
 func NewRefresher(options Options) (*Refresher, error) {
@@ -65,12 +69,41 @@ func NewRefresher(options Options) (*Refresher, error) {
 		chunkSize = defaultChunkSize
 	}
 
+	completedRewardIDs := rewards.CompletedCampaignIDs(options.RewardProgress)
+	rewardProgressMinutes := rewardMinutesByCampaignID(options.RewardProgress)
+
 	return &Refresher{
-		gqlClient: options.GQLClient,
-		authState: options.AuthState,
-		now:       now,
-		chunkSize: chunkSize,
+		gqlClient:             options.GQLClient,
+		authState:             options.AuthState,
+		completedRewardIDs:    completedRewardIDs,
+		rewardProgressMinutes: rewardProgressMinutes,
+		now:                   now,
+		chunkSize:             chunkSize,
 	}, nil
+}
+
+func (r *Refresher) UpdateRewardProgress(progress map[string]rewards.Progress) {
+	if r == nil {
+		return
+	}
+
+	r.completedRewardIDs = rewards.CompletedCampaignIDs(progress)
+	r.rewardProgressMinutes = rewardMinutesByCampaignID(progress)
+}
+
+func rewardMinutesByCampaignID(progress map[string]rewards.Progress) map[string]int {
+	if len(progress) == 0 {
+		return nil
+	}
+
+	result := make(map[string]int, len(progress))
+	for campaignID, item := range progress {
+		if item.MinutesWatched <= 0 {
+			continue
+		}
+		result[campaignID] = item.MinutesWatched
+	}
+	return result
 }
 
 func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapshot, error) {

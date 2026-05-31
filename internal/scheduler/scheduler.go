@@ -14,6 +14,7 @@ import (
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/inventory"
 	"twitchdropsminergo/internal/pubsub"
+	"twitchdropsminergo/internal/rewards"
 )
 
 const (
@@ -68,6 +69,15 @@ type AuthState interface {
 	Snapshot() auth.Snapshot
 }
 
+type RewardProgressStore interface {
+	Snapshot() map[string]rewards.Progress
+	RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (rewards.Progress, error)
+}
+
+type rewardProgressAwareRefresher interface {
+	UpdateRewardProgress(map[string]rewards.Progress)
+}
+
 type channelChangeRegistrar interface {
 	SetChannelChangeHandler(func(before, after domain.Channel))
 }
@@ -80,6 +90,7 @@ type Options struct {
 	PubSub            PubSubManager
 	GQLClient         GQLClient
 	AuthState         AuthState
+	RewardProgress    RewardProgressStore
 	Clock             func() time.Time
 	Sleep             func(context.Context, time.Duration) error
 	WatchInterval     time.Duration
@@ -114,6 +125,7 @@ type Scheduler struct {
 	pubsub            PubSubManager
 	gqlClient         GQLClient
 	authState         AuthState
+	rewardProgress    RewardProgressStore
 	now               func() time.Time
 	sleep             func(context.Context, time.Duration) error
 	watchInterval     time.Duration

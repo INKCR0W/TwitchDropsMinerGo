@@ -132,7 +132,12 @@ func (r *Refresher) fetchRewardCampaigns(ctx context.Context, now time.Time) (ma
 			return nil, err
 		}
 		for _, campaign := range campaigns {
-			converted, ok, err := rewardCampaignToDropCampaign(campaign, now)
+			campaignID := rewardCampaignIDPrefix + stringValue(campaign, "id")
+			if _, completed := r.completedRewardIDs[campaignID]; completed {
+				continue
+			}
+
+			converted, ok, err := rewardCampaignToDropCampaignWithProgress(campaign, now, r.rewardProgressMinutes[campaignID])
 			if err != nil {
 				return nil, err
 			}

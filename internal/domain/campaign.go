@@ -432,6 +432,20 @@ func (c *DropsCampaign) BumpMinutes(now time.Time, channel *Channel, enableBadge
 	return reachedLimit
 }
 
+func (c *DropsCampaign) BumpRewardMinutes(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
+	if c == nil || !c.IsRewardCampaign {
+		return false
+	}
+
+	completed := false
+	for _, drop := range c.Drops() {
+		if drop.BumpMinutesUntilRequired(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
+			completed = true
+		}
+	}
+	return completed
+}
+
 func (c *DropsCampaign) CanEarnWithin(now time.Time, stamp time.Time, enableBadgesEmotes bool) bool {
 	if c == nil ||
 		!c.Eligible(enableBadgesEmotes) ||
