@@ -281,6 +281,9 @@ func TestResolveProgressCompletesRewardCampaignWithoutCurrentDrop(t *testing.T) 
 	if record.CampaignID != "reward:builder-cape" || record.DropID != "reward:builder-cape-drop" || record.MinutesWatched != 5 || record.CompletedAt.IsZero() {
 		t.Fatalf("reward 完成记录不匹配: %#v", record)
 	}
+	if !record.ExpiresAt.Equal(campaign.EndsAt) {
+		t.Fatalf("reward 完成记录应包含活动过期时间: %#v", record)
+	}
 	if drop := campaign.Drop("reward:builder-cape-drop"); drop == nil || !drop.IsClaimed {
 		t.Fatalf("完成后的 reward drop 应在内存快照中标记为 claimed: %#v", drop)
 	}

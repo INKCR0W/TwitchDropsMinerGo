@@ -40,6 +40,78 @@ func TestFileStoreRecordProgressPersistsCompletion(t *testing.T) {
 	}
 }
 
+func TestFileStoreRecordCompletionPersistsExpiresAt(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "reward-progress.json")
+	now := time.Date(2026, 5, 31, 13, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(24 * time.Hour)
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("NewFileStore 返回错误: %v", err)
+	}
+
+	progress, err := store.RecordCompletion("reward:campaign", "reward:drop", 5, now, expiresAt)
+	if err != nil {
+		t.Fatalf("RecordCompletion 返回错误: %v", err)
+	}
+	if !progress.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("完成进度应记录过期时间: %#v", progress)
+	}
+
+	reloaded, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("重新加载 FileStore 返回错误: %v", err)
+	}
+	if got := reloaded.Snapshot()["reward:campaign"]; !got.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("持久化过期时间不匹配: %#v", got)
+	}
+}
+
+func TestFileStorePruneExpiredRemovesOnlyExpiredRecordsWithExpiry(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "reward-progress.json")
+	now := time.Date(2026, 5, 31, 13, 0, 0, 0, time.UTC)
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("NewFileStore 返回错误: %v", err)
+	}
+
+	if _, err := store.RecordCompletion("reward:expired", "reward:drop-expired", 5, now.Add(-10*24*time.Hour), now.Add(-8*24*time.Hour)); err != nil {
+		t.Fatalf("写入过期记录失败: %v", err)
+	}
+	if _, err := store.RecordCompletion("reward:fresh", "reward:drop-fresh", 5, now.Add(-time.Hour), now.Add(-6*24*time.Hour)); err != nil {
+		t.Fatalf("写入宽限期内记录失败: %v", err)
+	}
+	if _, err := store.RecordProgress("reward:legacy", "reward:drop-legacy", 5, true, now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatalf("写入旧格式记录失败: %v", err)
+	}
+
+	removed, err := store.PruneExpired(now, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("PruneExpired 返回错误: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("应只清理一条过期记录: %d", removed)
+	}
+
+	reloaded, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("重新加载 FileStore 返回错误: %v", err)
+	}
+	snapshot := reloaded.Snapshot()
+	if _, ok := snapshot["reward:expired"]; ok {
+		t.Fatalf("过期记录应被清理: %#v", snapshot)
+	}
+	if _, ok := snapshot["reward:fresh"]; !ok {
+		t.Fatalf("宽限期内记录不应被清理: %#v", snapshot)
+	}
+	if _, ok := snapshot["reward:legacy"]; !ok {
+		t.Fatalf("无 ExpiresAt 的旧记录不应被清理: %#v", snapshot)
+	}
+}
+
 func TestFileStoreRecordProgressDoesNotRegressMinutesOrCompletionTime(t *testing.T) {
 	t.Parallel()
 

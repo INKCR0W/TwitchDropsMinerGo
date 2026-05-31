@@ -80,6 +80,11 @@ func New(options Options) (*Scheduler, error) {
 		claimSweepTimeout = DefaultClaimSweepTimeout
 	}
 
+	rewardPruneGrace := options.RewardPruneGrace
+	if rewardPruneGrace <= 0 {
+		rewardPruneGrace = DefaultRewardPruneGrace
+	}
+
 	settings := options.Settings.Clone()
 	if settings.IsZero() {
 		settings = config.DefaultSettings()
@@ -103,6 +108,7 @@ func New(options Options) (*Scheduler, error) {
 		directoryLimit:    directoryLimit,
 		maxChannels:       maxChannels,
 		claimSweepTimeout: claimSweepTimeout,
+		rewardPruneGrace:  rewardPruneGrace,
 		state:             StateIdle,
 		channels:          make(map[int64]domain.Channel),
 		stateChanged:      make(chan struct{}, 1),

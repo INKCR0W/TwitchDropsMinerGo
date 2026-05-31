@@ -346,7 +346,7 @@ func (s *Scheduler) recordRewardCompletedLocked(campaign *domain.DropsCampaign, 
 		if drop == nil || drop.CurrentMinutes() < drop.RequiredMinutes {
 			continue
 		}
-		if _, err := s.rewardProgress.RecordProgress(campaign.ID, drop.ID, drop.CurrentMinutes(), true, now); err != nil {
+		if _, err := s.rewardProgress.RecordCompletion(campaign.ID, drop.ID, drop.CurrentMinutes(), now, campaign.EndsAt); err != nil {
 			s.logger.Warn("保存 reward campaign 完成状态失败", "campaign_id", campaign.ID, "drop_id", drop.ID, "error", err)
 			continue
 		}

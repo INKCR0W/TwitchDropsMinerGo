@@ -13,6 +13,7 @@ import (
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/inventory"
+	"twitchdropsminergo/internal/rewards"
 )
 
 func TestCloneInventorySnapshotCreatesIndependentCampaignGraph(t *testing.T) {
@@ -376,5 +377,55 @@ func TestUpdateSettingsReconfiguresTrackerAndRequestsReload(t *testing.T) {
 	}
 	if tracker.configuredSettings.Priority[0] != "B" {
 		t.Fatalf("Tracker Priority 配置不匹配: %#v", tracker.configuredSettings)
+	}
+}
+
+func TestSyncRewardProgressPrunesExpiredRecordsBeforeRefreshing(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	expiredCampaignID := "reward:expired"
+	freshCampaignID := "reward:fresh"
+	progressStore := &fakeRewardProgressStore{
+		progress: map[string]rewards.Progress{
+			expiredCampaignID: {
+				CampaignID:     expiredCampaignID,
+				DropID:         "reward:expired-drop",
+				MinutesWatched: 5,
+				CompletedAt:    now.Add(-10 * 24 * time.Hour),
+				ExpiresAt:      now.Add(-8 * 24 * time.Hour),
+				UpdatedAt:      now.Add(-10 * 24 * time.Hour),
+			},
+			freshCampaignID: {
+				CampaignID:     freshCampaignID,
+				DropID:         "reward:fresh-drop",
+				MinutesWatched: 5,
+				CompletedAt:    now.Add(-time.Hour),
+				ExpiresAt:      now.Add(-6 * 24 * time.Hour),
+				UpdatedAt:      now.Add(-time.Hour),
+			},
+		},
+	}
+	refresher := &fakeRefresher{}
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		refresher:        refresher,
+		rewardProgress:   progressStore,
+		now:              func() time.Time { return now },
+		rewardPruneGrace: 7 * 24 * time.Hour,
+	})
+
+	scheduler.syncRewardProgressToRefresher()
+
+	if _, ok := progressStore.progress[expiredCampaignID]; ok {
+		t.Fatalf("超过宽限期的 reward 完成记录应被清理: %#v", progressStore.progress)
+	}
+	if _, ok := progressStore.progress[freshCampaignID]; !ok {
+		t.Fatalf("宽限期内 reward 完成记录不应被清理: %#v", progressStore.progress)
+	}
+	if _, ok := refresher.rewardProgress[expiredCampaignID]; ok {
+		t.Fatalf("refresher 不应收到已清理记录: %#v", refresher.rewardProgress)
+	}
+	if _, ok := refresher.rewardProgress[freshCampaignID]; !ok {
+		t.Fatalf("refresher 应收到保留记录: %#v", refresher.rewardProgress)
 	}
 }

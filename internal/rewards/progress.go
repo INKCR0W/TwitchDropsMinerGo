@@ -17,12 +17,15 @@ type Progress struct {
 	DropID         string    `json:"drop_id"`
 	MinutesWatched int       `json:"minutes_watched"`
 	CompletedAt    time.Time `json:"completed_at,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type Store interface {
 	Snapshot() map[string]Progress
 	RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (Progress, error)
+	RecordCompletion(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (Progress, error)
+	PruneExpired(now time.Time, gracePeriod time.Duration) (int, error)
 }
 
 type FileStore struct {
@@ -63,6 +66,14 @@ func (s *FileStore) Snapshot() map[string]Progress {
 }
 
 func (s *FileStore) RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (Progress, error) {
+	return s.recordProgress(campaignID, dropID, minutesWatched, completed, now, time.Time{})
+}
+
+func (s *FileStore) RecordCompletion(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (Progress, error) {
+	return s.recordProgress(campaignID, dropID, minutesWatched, true, now, expiresAt)
+}
+
+func (s *FileStore) recordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time, expiresAt time.Time) (Progress, error) {
 	if s == nil {
 		return Progress{}, fmt.Errorf("reward 进度存储未初始化")
 	}
@@ -79,6 +90,9 @@ func (s *FileStore) RecordProgress(campaignID string, dropID string, minutesWatc
 		minutesWatched = 0
 	}
 	now = now.UTC()
+	if !expiresAt.IsZero() {
+		expiresAt = expiresAt.UTC()
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -100,6 +114,9 @@ func (s *FileStore) RecordProgress(campaignID string, dropID string, minutesWatc
 	if completed && current.CompletedAt.IsZero() {
 		current.CompletedAt = now
 	}
+	if completed && !expiresAt.IsZero() {
+		current.ExpiresAt = expiresAt
+	}
 	current.UpdatedAt = now
 	s.data.Progress[campaignID] = current
 
@@ -108,6 +125,43 @@ func (s *FileStore) RecordProgress(campaignID string, dropID string, minutesWatc
 		return Progress{}, fmt.Errorf("保存 reward 进度失败: %w", err)
 	}
 	return current, nil
+}
+
+func (s *FileStore) PruneExpired(now time.Time, gracePeriod time.Duration) (int, error) {
+	if s == nil {
+		return 0, fmt.Errorf("reward 进度存储未初始化")
+	}
+	if gracePeriod < 0 {
+		gracePeriod = 0
+	}
+	now = now.UTC()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.data.Progress) == 0 {
+		return 0, nil
+	}
+
+	previous := s.data
+	previous.Progress = cloneProgressMap(s.data.Progress)
+	removed := 0
+	for campaignID, progress := range s.data.Progress {
+		if progress.ExpiresAt.IsZero() || now.Before(progress.ExpiresAt.Add(gracePeriod)) {
+			continue
+		}
+		delete(s.data.Progress, campaignID)
+		removed++
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+
+	if err := storage.SaveJSONFile(s.path, s.data); err != nil {
+		s.data = previous
+		return 0, fmt.Errorf("保存 reward 进度失败: %w", err)
+	}
+	return removed, nil
 }
 
 func CompletedCampaignIDs(progress map[string]Progress) map[string]struct{} {

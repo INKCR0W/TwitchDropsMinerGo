@@ -23,6 +23,7 @@ const (
 	DefaultMaintenanceReload = time.Hour
 	DefaultErrorRetryDelay   = time.Minute
 	DefaultClaimSweepTimeout = 30 * time.Second
+	DefaultRewardPruneGrace  = 7 * 24 * time.Hour
 	defaultDirectoryLimit    = 20
 )
 
@@ -72,6 +73,8 @@ type AuthState interface {
 type RewardProgressStore interface {
 	Snapshot() map[string]rewards.Progress
 	RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (rewards.Progress, error)
+	RecordCompletion(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (rewards.Progress, error)
+	PruneExpired(now time.Time, gracePeriod time.Duration) (int, error)
 }
 
 type rewardProgressAwareRefresher interface {
@@ -100,6 +103,7 @@ type Options struct {
 	DirectoryLimit    int
 	MaxChannels       int
 	ClaimSweepTimeout time.Duration
+	RewardPruneGrace  time.Duration
 }
 
 type StatusSnapshot struct {
@@ -135,6 +139,7 @@ type Scheduler struct {
 	directoryLimit    int
 	maxChannels       int
 	claimSweepTimeout time.Duration
+	rewardPruneGrace  time.Duration
 
 	mu                sync.RWMutex
 	state             State

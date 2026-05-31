@@ -34,6 +34,7 @@ type testSchedulerOptions struct {
 	maintenanceReload time.Duration
 	errorRetryDelay   time.Duration
 	claimSweepTimeout time.Duration
+	rewardPruneGrace  time.Duration
 }
 
 func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
@@ -85,6 +86,7 @@ func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
 		MaintenanceReload: options.maintenanceReload,
 		ErrorRetryDelay:   options.errorRetryDelay,
 		ClaimSweepTimeout: options.claimSweepTimeout,
+		RewardPruneGrace:  options.rewardPruneGrace,
 	})
 	if err != nil {
 		t.Fatalf("New 返回错误: %v", err)
@@ -308,6 +310,14 @@ func (f *fakeRewardProgressStore) Snapshot() map[string]rewards.Progress {
 }
 
 func (f *fakeRewardProgressStore) RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (rewards.Progress, error) {
+	return f.recordProgress(campaignID, dropID, minutesWatched, completed, now, time.Time{})
+}
+
+func (f *fakeRewardProgressStore) RecordCompletion(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (rewards.Progress, error) {
+	return f.recordProgress(campaignID, dropID, minutesWatched, true, now, expiresAt)
+}
+
+func (f *fakeRewardProgressStore) recordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time, expiresAt time.Time) (rewards.Progress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -326,10 +336,35 @@ func (f *fakeRewardProgressStore) RecordProgress(campaignID string, dropID strin
 	if completed && progress.CompletedAt.IsZero() {
 		progress.CompletedAt = now.UTC()
 	}
+	if completed && !expiresAt.IsZero() {
+		progress.ExpiresAt = expiresAt.UTC()
+	}
 	progress.UpdatedAt = now.UTC()
 	f.progress[campaignID] = progress
 	f.records = append(f.records, progress)
 	return progress, nil
+}
+
+func (f *fakeRewardProgressStore) PruneExpired(now time.Time, gracePeriod time.Duration) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.err != nil {
+		return 0, f.err
+	}
+	if gracePeriod < 0 {
+		gracePeriod = 0
+	}
+	now = now.UTC()
+	removed := 0
+	for campaignID, progress := range f.progress {
+		if progress.ExpiresAt.IsZero() || now.Before(progress.ExpiresAt.Add(gracePeriod)) {
+			continue
+		}
+		delete(f.progress, campaignID)
+		removed++
+	}
+	return removed, nil
 }
 
 func (f *fakeRewardProgressStore) lastRecord() (rewards.Progress, bool) {

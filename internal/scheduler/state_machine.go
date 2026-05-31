@@ -138,6 +138,11 @@ func (s *Scheduler) syncRewardProgressToRefresher() {
 	if s == nil || s.rewardProgress == nil {
 		return
 	}
+	if removed, err := s.rewardProgress.PruneExpired(s.nowUTC(), s.rewardPruneGrace); err != nil {
+		s.logger.Warn("清理过期 reward campaign 完成状态失败", "error", err)
+	} else if removed > 0 {
+		s.logger.Info("已清理过期 reward campaign 完成状态", "removed_count", removed)
+	}
 	aware, ok := s.refresher.(rewardProgressAwareRefresher)
 	if !ok {
 		return
