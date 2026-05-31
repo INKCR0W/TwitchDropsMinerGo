@@ -106,3 +106,43 @@ func TestNewFileStoreRejectsEmptyPath(t *testing.T) {
 		t.Fatal("空路径应返回错误，避免写入当前目录")
 	}
 }
+
+func TestNewFileStoreFallsBackToEmptyProgressWhenFileIsCorrupt(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "reward-progress.json")
+	if err := os.WriteFile(path, []byte("{invalid"), 0o644); err != nil {
+		t.Fatalf("写入损坏进度文件失败: %v", err)
+	}
+
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("损坏进度文件应降级为空进度而不是启动失败: %v", err)
+	}
+	if snapshot := store.Snapshot(); len(snapshot) != 0 {
+		t.Fatalf("损坏文件降级后应为空进度: %#v", snapshot)
+	}
+	if _, err := os.Stat(path + ".bad"); err != nil {
+		t.Fatalf("损坏文件应备份为 .bad: %v", err)
+	}
+}
+
+func TestNewFileStoreFallsBackToEmptyProgressWhenFileIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "reward-progress.json")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatalf("写入空进度文件失败: %v", err)
+	}
+
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("空进度文件应降级为空进度而不是启动失败: %v", err)
+	}
+	if snapshot := store.Snapshot(); len(snapshot) != 0 {
+		t.Fatalf("空文件降级后应为空进度: %#v", snapshot)
+	}
+	if _, err := os.Stat(path + ".bad"); err != nil {
+		t.Fatalf("空文件应备份为 .bad: %v", err)
+	}
+}

@@ -687,8 +687,9 @@ func TestRewardCampaignBumpMinutesStopsAtRequiredMinutes(t *testing.T) {
 	if drop.CurrentMinutes() != 5 {
 		t.Fatalf("reward 本地分钟不匹配: current=%d", drop.CurrentMinutes())
 	}
+	drop.MarkClaimed()
 	if completed := campaign.BumpRewardMinutes(now, channel, false, false); completed {
-		t.Fatal("达到所需分钟后不应继续被视为可赚取")
+		t.Fatal("本地已完成并标记 claimed 后不应继续被视为可赚取")
 	}
 	if drop.CurrentMinutes() != 5 {
 		t.Fatalf("reward 本地分钟不应超过所需分钟: current=%d", drop.CurrentMinutes())

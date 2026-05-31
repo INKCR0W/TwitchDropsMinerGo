@@ -124,6 +124,7 @@ func (r *Refresher) fetchRewardCampaigns(ctx context.Context, now time.Time) (ma
 		roots = append(roots, currentUser)
 	}
 
+	completedRewardIDs, rewardProgressMinutes := r.rewardProgressState()
 	rewardPayload := make(map[string]any)
 	seen := make(map[string]struct{})
 	for _, root := range roots {
@@ -133,11 +134,11 @@ func (r *Refresher) fetchRewardCampaigns(ctx context.Context, now time.Time) (ma
 		}
 		for _, campaign := range campaigns {
 			campaignID := rewardCampaignIDPrefix + stringValue(campaign, "id")
-			if _, completed := r.completedRewardIDs[campaignID]; completed {
+			if _, completed := completedRewardIDs[campaignID]; completed {
 				continue
 			}
 
-			converted, ok, err := rewardCampaignToDropCampaignWithProgress(campaign, now, r.rewardProgressMinutes[campaignID])
+			converted, ok, err := rewardCampaignToDropCampaignWithProgress(campaign, now, rewardProgressMinutes[campaignID])
 			if err != nil {
 				return nil, err
 			}

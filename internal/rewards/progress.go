@@ -2,6 +2,7 @@ package rewards
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +43,10 @@ func NewFileStore(path string) (*FileStore, error) {
 	}
 	data, err := storage.LoadJSONFile(store.path, defaultPersistedProgress())
 	if err != nil {
-		return nil, fmt.Errorf("加载 reward 进度失败: %w", err)
+		if !backupCorruptProgressFile(store.path) && !backupCorruptProgressFile(store.path+".bak") {
+			return nil, fmt.Errorf("加载 reward 进度失败: %w", err)
+		}
+		data = defaultPersistedProgress()
 	}
 	store.data = normalizePersistedProgress(data)
 	return store, nil
@@ -145,4 +149,17 @@ func cloneProgressMap(progress map[string]Progress) map[string]Progress {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func backupCorruptProgressFile(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	if _, err := os.ReadFile(path); err != nil {
+		return false
+	}
+
+	backupPath := path + ".bad"
+	_ = os.Remove(backupPath)
+	return os.Rename(path, backupPath) == nil
 }

@@ -317,13 +317,16 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 
 	activeCampaign := s.activeCampaignLocked(now, channel)
 	if activeCampaign == nil {
-		return false, false, false
+		activeCampaign = s.pendingRewardCompletionCampaignLocked(now, channel)
+		if activeCampaign == nil {
+			return false, false, false
+		}
 	}
 	if activeCampaign.IsRewardCampaign {
 		completed := activeCampaign.BumpRewardMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
 		s.lastProgressAt = now.UTC()
 		if completed {
-			s.recordRewardCompletedLocked(activeCampaign, now)
+			completed = s.recordRewardCompletedLocked(activeCampaign, now)
 		}
 		return completed, false, true
 	}
@@ -333,9 +336,9 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 	return false, reachedLimit, true
 }
 
-func (s *Scheduler) recordRewardCompletedLocked(campaign *domain.DropsCampaign, now time.Time) {
+func (s *Scheduler) recordRewardCompletedLocked(campaign *domain.DropsCampaign, now time.Time) bool {
 	if s == nil || s.rewardProgress == nil || campaign == nil || !campaign.IsRewardCampaign {
-		return
+		return false
 	}
 
 	var saved bool
@@ -358,11 +361,12 @@ func (s *Scheduler) recordRewardCompletedLocked(campaign *domain.DropsCampaign, 
 		)
 	}
 	if !saved {
-		return
+		return false
 	}
 	if aware, ok := s.refresher.(rewardProgressAwareRefresher); ok {
 		aware.UpdateRewardProgress(s.rewardProgress.Snapshot())
 	}
+	return true
 }
 
 func (s *Scheduler) updateDropClaim(dropID string, claimID string) (string, string, bool) {

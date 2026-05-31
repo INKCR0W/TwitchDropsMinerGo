@@ -287,7 +287,13 @@ func (d *TimedDrop) BumpMinutes(now time.Time, channel *Channel, enableBadgesEmo
 }
 
 func (d *TimedDrop) BumpMinutesUntilRequired(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
-	if d == nil || d.CurrentMinutes() >= d.RequiredMinutes || !d.CanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
+	if d == nil || d.IsClaimed {
+		return false
+	}
+	if d.CurrentMinutes() >= d.RequiredMinutes {
+		return d.Campaign != nil && d.Campaign.baseCanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus)
+	}
+	if !d.CanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
 		return false
 	}
 

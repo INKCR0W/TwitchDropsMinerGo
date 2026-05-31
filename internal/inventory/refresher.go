@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"twitchdropsminergo/internal/auth"
@@ -45,6 +46,7 @@ type Snapshot struct {
 type Refresher struct {
 	gqlClient             GQLClient
 	authState             AuthState
+	rewardMu              sync.RWMutex
 	completedRewardIDs    map[string]struct{}
 	rewardProgressMinutes map[string]int
 	now                   func() time.Time
@@ -87,8 +89,16 @@ func (r *Refresher) UpdateRewardProgress(progress map[string]rewards.Progress) {
 		return
 	}
 
+	r.rewardMu.Lock()
+	defer r.rewardMu.Unlock()
 	r.completedRewardIDs = rewards.CompletedCampaignIDs(progress)
 	r.rewardProgressMinutes = rewardMinutesByCampaignID(progress)
+}
+
+func (r *Refresher) rewardProgressState() (map[string]struct{}, map[string]int) {
+	r.rewardMu.RLock()
+	defer r.rewardMu.RUnlock()
+	return cloneStringSet(r.completedRewardIDs), cloneIntMap(r.rewardProgressMinutes)
 }
 
 func rewardMinutesByCampaignID(progress map[string]rewards.Progress) map[string]int {
@@ -104,6 +114,30 @@ func rewardMinutesByCampaignID(progress map[string]rewards.Progress) map[string]
 		result[campaignID] = item.MinutesWatched
 	}
 	return result
+}
+
+func cloneStringSet(values map[string]struct{}) map[string]struct{} {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]struct{}, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneIntMap(values map[string]int) map[string]int {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]int, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapshot, error) {

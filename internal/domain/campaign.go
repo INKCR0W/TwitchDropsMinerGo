@@ -401,6 +401,19 @@ func (c *DropsCampaign) CanEarn(now time.Time, channel *Channel, enableBadgesEmo
 	return false
 }
 
+func (c *DropsCampaign) CanRecordRewardCompletion(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
+	if c == nil || !c.IsRewardCampaign || !c.baseCanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
+		return false
+	}
+
+	for _, drop := range c.Drops() {
+		if drop != nil && !drop.IsClaimed && drop.CurrentMinutes() >= drop.RequiredMinutes {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *DropsCampaign) UpdateMinutes(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool, newMinutes int) bool {
 	if c == nil {
 		return false

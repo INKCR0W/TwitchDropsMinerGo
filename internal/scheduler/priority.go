@@ -222,6 +222,21 @@ func (s *Scheduler) activeCampaignLocked(now time.Time, channel *domain.Channel)
 	return selectActiveCampaign(s.snapshot.Inventory, now, channel, s.settings.EnableBadgesEmotes)
 }
 
+func (s *Scheduler) pendingRewardCompletionCampaignLocked(now time.Time, channel *domain.Channel) *domain.DropsCampaign {
+	var selected *domain.DropsCampaign
+	for _, campaign := range s.snapshot.Inventory {
+		if campaign == nil || !campaign.CanRecordRewardCompletion(now, channel, s.settings.EnableBadgesEmotes, false) {
+			continue
+		}
+		if selected == nil ||
+			campaign.RemainingMinutes() < selected.RemainingMinutes() ||
+			(campaign.RemainingMinutes() == selected.RemainingMinutes() && campaign.ID < selected.ID) {
+			selected = campaign
+		}
+	}
+	return selected
+}
+
 func (s *Scheduler) campaignCanEarn(campaignID string, channel *domain.Channel) bool {
 	now := s.nowUTC()
 
