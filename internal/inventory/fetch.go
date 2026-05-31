@@ -68,6 +68,9 @@ func (r *Refresher) fetchAvailableCampaigns(ctx context.Context) ([]campaignEnve
 		return nil, fmt.Errorf("解析 Campaigns 响应失败: %w", err)
 	}
 
+	if campaignsRoot == nil {
+		return nil, nil
+	}
 	campaignList, err := asSlice(campaignsRoot, "Campaigns.currentUser.dropCampaigns")
 	if err != nil {
 		return nil, err
@@ -80,6 +83,9 @@ func (r *Refresher) fetchAvailableCampaigns(ctx context.Context) ([]campaignEnve
 
 	availableCampaigns := make([]campaignEnvelope, 0, len(campaignList))
 	for index, item := range campaignList {
+		if item == nil {
+			continue
+		}
 		campaignData, err := asMap(item, fmt.Sprintf("Campaigns.currentUser.dropCampaigns[%d]", index))
 		if err != nil {
 			return nil, err

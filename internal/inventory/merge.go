@@ -38,7 +38,10 @@ func mergeValues(primary any, secondary any) (any, error) {
 		if primaryNil && secondaryNil {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("合并数据类型不一致: %T vs %T", primary, secondary)
+		if primaryNil {
+			return cloneValue(secondary), nil
+		}
+		return cloneValue(primary), nil
 	}
 
 	if reflect.TypeOf(primary) != reflect.TypeOf(secondary) {
