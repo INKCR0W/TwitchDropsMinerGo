@@ -41,10 +41,14 @@ type tokenErrorResponse struct {
 	Message string `json:"message"`
 }
 
-func (s *State) oauthLoginLocked(ctx context.Context) (string, error) {
+func (s *State) oauthLogin(ctx context.Context) (string, error) {
 	if s.onDeviceCode == nil {
 		return "", fmt.Errorf("缺少 device code 处理回调")
 	}
+
+	s.mu.Lock()
+	deviceID := s.deviceID
+	s.mu.Unlock()
 
 	headers := make(http.Header)
 	headers.Set("Accept", "application/json")
@@ -56,7 +60,7 @@ func (s *State) oauthLoginLocked(ctx context.Context) (string, error) {
 	headers.Set("Origin", s.clientInfo.ClientURL)
 	headers.Set("Referer", s.clientInfo.ClientURL)
 	headers.Set("User-Agent", s.clientInfo.UserAgent)
-	headers.Set("X-Device-Id", s.deviceID)
+	headers.Set("X-Device-Id", deviceID)
 
 	for {
 		issuedAt := s.now().UTC()
@@ -99,7 +103,7 @@ func (s *State) oauthLoginLocked(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("处理 device code 失败: %w", err)
 		}
 
-		accessToken, retryWithNewCode, err := s.pollAccessTokenLocked(ctx, headers, issuedCode.DeviceCode, expiresAt, interval)
+		accessToken, retryWithNewCode, err := s.pollAccessToken(ctx, headers, issuedCode.DeviceCode, expiresAt, interval)
 		if err != nil {
 			return "", err
 		}
@@ -110,7 +114,7 @@ func (s *State) oauthLoginLocked(ctx context.Context) (string, error) {
 	}
 }
 
-func (s *State) pollAccessTokenLocked(ctx context.Context, headers http.Header, deviceCode string, expiresAt time.Time, interval time.Duration) (string, bool, error) {
+func (s *State) pollAccessToken(ctx context.Context, headers http.Header, deviceCode string, expiresAt time.Time, interval time.Duration) (string, bool, error) {
 	currentInterval := interval
 	for {
 		if err := s.sleep(ctx, currentInterval); err != nil {

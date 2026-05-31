@@ -52,6 +52,7 @@ type State struct {
 	generateSession  func() (string, error)
 	onDeviceCode     DeviceCodeHandler
 
+	validateMu    sync.Mutex
 	mu            sync.Mutex
 	userID        int64
 	deviceID      string
@@ -132,27 +133,34 @@ func (s *State) Validate(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.validateMu.Lock()
+	defer s.validateMu.Unlock()
 
+	s.mu.Lock()
 	if s.sessionID == "" {
 		sessionID, err := s.generateSession()
 		if err != nil {
+			s.mu.Unlock()
 			return fmt.Errorf("生成 session_id 失败: %w", err)
 		}
 		if sessionID == "" {
+			s.mu.Unlock()
 			return fmt.Errorf("生成 session_id 失败: 结果为空")
 		}
 		s.sessionID = sessionID
 	}
 
-	if s.deviceID == "" {
+	hasDevice := s.deviceID != ""
+	alreadyAuthenticated := s.accessToken != "" && s.userID != 0
+	s.mu.Unlock()
+
+	if !hasDevice {
 		if err := s.ensureDeviceID(ctx); err != nil {
 			return err
 		}
 	}
 
-	if s.accessToken != "" && s.userID != 0 {
+	if alreadyAuthenticated {
 		return nil
 	}
 
