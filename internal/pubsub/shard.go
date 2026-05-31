@@ -142,9 +142,9 @@ func (s *shard) run(ctx context.Context) {
 			continue
 		}
 
-		backoff.Reset()
 		s.setConn(conn)
 		s.setState(ShardStateConnecting, true)
+		connectedAt := s.manager.now()
 		if err := s.handleConnection(ctx, conn); err != nil && ctx.Err() == nil {
 			s.manager.logger.Warn("PubSub 连接断开，准备重连", "shard", s.index, "error", err)
 		}
@@ -158,10 +158,18 @@ func (s *shard) run(ctx context.Context) {
 
 		if s.topicCount() == 0 {
 			s.setState(ShardStateDisconnected, false)
+			backoff.Reset()
 			continue
 		}
 
 		s.setState(ShardStateReconnecting, false)
+		if s.manager.now().Sub(connectedAt) >= s.manager.pingInterval+s.manager.pingTimeout {
+			backoff.Reset()
+		}
+		if err := s.manager.sleep(ctx, backoff.Next()); err != nil {
+			s.finishRun()
+			return
+		}
 	}
 }
 
