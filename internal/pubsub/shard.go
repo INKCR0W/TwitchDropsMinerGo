@@ -426,9 +426,16 @@ func (s *shard) dispatchMessage(ctx context.Context, payload json.RawMessage) er
 		ReceivedAt: s.manager.now().UTC(),
 	}
 
+	select {
+	case s.manager.handlerSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	s.manager.wg.Add(1)
 	go func() {
 		defer s.manager.wg.Done()
+		defer func() { <-s.manager.handlerSlots }()
 		if err := topic.Handler()(ctx, event); err != nil && ctx.Err() == nil {
 			s.manager.logger.Warn("处理 PubSub 事件失败", "shard", s.index, "topic", topic.Key(), "error", err)
 		}

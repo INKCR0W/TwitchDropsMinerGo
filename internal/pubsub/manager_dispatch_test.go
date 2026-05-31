@@ -71,3 +71,63 @@ func TestManagerDispatchesIncomingMessage(t *testing.T) {
 		t.Fatal("未收到 PubSub 事件分发")
 	}
 }
+
+func TestManagerLimitsConcurrentHandlers(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeConn()
+	manager := newTestManager(t, Options{
+		Auth: &stubAuthState{
+			snapshot: auth.Snapshot{AccessToken: "token-limit"},
+		},
+		Dialer:       &fakeDialer{connections: []*fakeConn{conn}},
+		ReadTimeout:  5 * time.Millisecond,
+		PingInterval: time.Hour,
+		HandlerLimit: 1,
+	})
+
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	topic := MustNewTopic(CategoryUser, TopicDrops, 42, func(_ context.Context, event Event) error {
+		entered <- struct{}{}
+		<-release
+		return nil
+	})
+	if err := manager.AddTopics(topic); err != nil {
+		t.Fatalf("AddTopics 返回错误: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Start 返回错误: %v", err)
+	}
+	defer func() {
+		close(release)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		_ = manager.Stop(stopCtx, true)
+	}()
+
+	conn.waitForType(t, "LISTEN", time.Second)
+	for i := 0; i < 2; i++ {
+		conn.pushText(t, map[string]any{
+			"type": "MESSAGE",
+			"data": map[string]any{
+				"topic":   topic.Key(),
+				"message": `{"type":"drop-progress"}`,
+			},
+		})
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("第一个 handler 未启动")
+	}
+	select {
+	case <-entered:
+		t.Fatal("HandlerLimit=1 时第二个 handler 不应并发启动")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
