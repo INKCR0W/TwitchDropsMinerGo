@@ -370,25 +370,20 @@ func TestRefresherRefreshBuildsInventoryIndicesAndTriggers(t *testing.T) {
 	activeCampaign := snapshot.Campaigns["campaign-active"]
 	if activeCampaign == nil {
 		t.Fatal("campaign-active 未写入 campaign 索引")
-	}
-	if !activeCampaign.Linked {
+	} else if !activeCampaign.Linked {
 		t.Fatal("inventory 主数据应覆盖 details 中的 linked=false")
-	}
-	if activeCampaign.ImageURL != "https://static.example.com/game-alpha.jpg" {
+	} else if activeCampaign.ImageURL != "https://static.example.com/game-alpha.jpg" {
 		t.Fatalf("boxArtURL 去尺寸失败: %q", activeCampaign.ImageURL)
-	}
-	if len(activeCampaign.AllowedChannels) != 1 || !activeCampaign.AllowedChannels[0].ACLBased {
+	} else if len(activeCampaign.AllowedChannels) != 1 || !activeCampaign.AllowedChannels[0].ACLBased {
 		t.Fatalf("ACL 频道映射不正确: %#v", activeCampaign.AllowedChannels)
 	}
 
 	activeDrop := snapshot.Drops["drop-active"]
 	if activeDrop == nil {
 		t.Fatal("drop-active 未写入 drop 索引")
-	}
-	if activeDrop.RealCurrentMinutes != 12 {
+	} else if activeDrop.RealCurrentMinutes != 12 {
 		t.Fatalf("inventory 主数据的 currentMinutesWatched 应保留: %d", activeDrop.RealCurrentMinutes)
-	}
-	if activeDrop.ClaimID != "claim-active" {
+	} else if activeDrop.ClaimID != "claim-active" {
 		t.Fatalf("inventory 主数据的 claim_id 应保留: %q", activeDrop.ClaimID)
 	}
 

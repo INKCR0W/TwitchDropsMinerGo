@@ -106,7 +106,9 @@ func TestManagerBacksOffAfterEstablishedConnectionFailure(t *testing.T) {
 	}()
 
 	conn1.waitForType(t, "LISTEN", time.Second)
-	conn1.Close()
+	if err := conn1.Close(); err != nil {
+		t.Fatalf("关闭首个连接失败: %v", err)
+	}
 
 	select {
 	case delay := <-sleepCalls:

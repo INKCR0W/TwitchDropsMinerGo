@@ -96,8 +96,7 @@ func TestRunRetriesInventoryRefreshErrorWhenSnapshotExists(t *testing.T) {
 
 	var runtimeRetrySleeps atomic.Int32
 	const retryDelay = 5 * time.Millisecond
-	var scheduler *Scheduler
-	scheduler = newTestScheduler(t, testSchedulerOptions{
+	scheduler := newTestScheduler(t, testSchedulerOptions{
 		refresher: refresher,
 		sleep: func(ctx context.Context, delay time.Duration) error {
 			if delay == retryDelay {
@@ -106,10 +105,8 @@ func TestRunRetriesInventoryRefreshErrorWhenSnapshotExists(t *testing.T) {
 				}
 				return nil
 			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			<-ctx.Done()
+			return ctx.Err()
 		},
 		errorRetryDelay: retryDelay,
 	})
@@ -187,8 +184,9 @@ func TestRunRetriesChannelFetchErrorWhenSnapshotExists(t *testing.T) {
 	drop := campaign.Drop("campaign-channel-fetch-retry-drop")
 	if drop == nil {
 		t.Fatal("期望测试 campaign 包含 drop")
+	} else {
+		drop.ExtraCurrentMinutes = 1
 	}
-	drop.ExtraCurrentMinutes = 1
 	channelFetchErr := errors.New("temporary directory failure")
 	stopAfterRetry := errors.New("stop after retry")
 	var directoryCalls atomic.Int32
@@ -210,8 +208,7 @@ func TestRunRetriesChannelFetchErrorWhenSnapshotExists(t *testing.T) {
 
 	var runtimeRetrySleeps atomic.Int32
 	const channelRetryDelay = 5 * time.Millisecond
-	var scheduler *Scheduler
-	scheduler = newTestScheduler(t, testSchedulerOptions{
+	scheduler := newTestScheduler(t, testSchedulerOptions{
 		refresher: refresher,
 		gqlClient: gqlClient,
 		sleep: func(ctx context.Context, delay time.Duration) error {
@@ -221,10 +218,8 @@ func TestRunRetriesChannelFetchErrorWhenSnapshotExists(t *testing.T) {
 				}
 				return nil
 			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			<-ctx.Done()
+			return ctx.Err()
 		},
 		settings: config.Settings{
 			Priority: []string{game.Name},
@@ -255,8 +250,9 @@ func TestHandleGamesUpdateContinuesAfterClaimSweepTimeout(t *testing.T) {
 	drop := campaign.Drop("campaign-timeout-drop")
 	if drop == nil {
 		t.Fatal("期望测试 campaign 包含 drop")
+	} else {
+		drop.UpdateClaim(drop.GenerateClaimID(42))
 	}
-	drop.UpdateClaim(drop.GenerateClaimID(42))
 
 	scheduler := newTestScheduler(t, testSchedulerOptions{
 		authState:         &fakeAuthState{snapshot: auth.Snapshot{UserID: 42}},

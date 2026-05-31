@@ -386,19 +386,17 @@ func TestRefresherRefreshMergesRewardCampaignsWithoutCampaignDetails(t *testing.
 	campaign := snapshot.Campaigns["reward:a62275d9-9fa6-43b8-9020-6ea9ebe4114b"]
 	if campaign == nil {
 		t.Fatalf("snapshot 应包含转换后的 Builder Cape: ids=%#v", campaignIDs(snapshot.Inventory))
-	}
-	if !campaign.IsRewardCampaign {
+	} else if !campaign.IsRewardCampaign {
 		t.Fatal("转换后的 Builder Cape campaign 应保留 reward 标记")
-	}
-	if campaign.Game.ID != 27471 || campaign.Game.Name != "Minecraft" {
+	} else if campaign.Game.ID != 27471 || campaign.Game.Name != "Minecraft" {
 		t.Fatalf("Builder Cape game 不匹配: %#v", campaign.Game)
-	}
-	drop := campaign.Drop("reward:8659c1c1-5926-11f1-a66f-0a58a9feac02")
-	if drop == nil {
-		t.Fatal("Builder Cape 应生成 reward: 前缀伪 drop")
-	}
-	if drop.RequiredMinutes != 5 {
-		t.Fatalf("Builder Cape required minutes 不匹配: %d", drop.RequiredMinutes)
+	} else {
+		drop := campaign.Drop("reward:8659c1c1-5926-11f1-a66f-0a58a9feac02")
+		if drop == nil {
+			t.Fatal("Builder Cape 应生成 reward: 前缀伪 drop")
+		} else if drop.RequiredMinutes != 5 {
+			t.Fatalf("Builder Cape required minutes 不匹配: %d", drop.RequiredMinutes)
+		}
 	}
 }
 

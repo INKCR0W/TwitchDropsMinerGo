@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -56,7 +57,7 @@ func TestNewRotatesOversizedLogFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New 返回错误: %v", err)
 	}
-	logger.LogAttrs(nil, slog.LevelInfo, "new")
+	logger.LogAttrs(context.Background(), slog.LevelInfo, "new")
 	if err := closeFn(); err != nil {
 		t.Fatalf("close 返回错误: %v", err)
 	}
