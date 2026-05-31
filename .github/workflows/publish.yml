@@ -18,7 +18,13 @@ concurrency:
 jobs:
   publish:
     name: Publish Release Assets
-    if: github.event.workflow_run.conclusion == 'success'
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      (
+        github.event.workflow_run.head_branch == 'main' ||
+        startsWith(github.event.workflow_run.head_branch, 'v')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Download workflow artifacts
@@ -47,6 +53,15 @@ jobs:
           set -a
           source "$metadata_path"
           set +a
+
+          if [[ "${EVENT_NAME:-}" != "push" ]]; then
+            echo "拒绝发布非 push 事件产物: EVENT_NAME=${EVENT_NAME:-}" >&2
+            exit 1
+          fi
+          if [[ "${ASSET_CHANNEL:-}" == pr-* ]]; then
+            echo "拒绝发布 PR 产物: ASSET_CHANNEL=${ASSET_CHANNEL:-}" >&2
+            exit 1
+          fi
 
           echo "release_kind=$RELEASE_KIND" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
