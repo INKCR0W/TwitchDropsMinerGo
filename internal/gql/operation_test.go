@@ -11,6 +11,7 @@ func TestRegistryIncludesCoreSliceOperations(t *testing.T) {
 	cases := map[OperationKey]string{
 		OperationInventory:       "Inventory",
 		OperationCampaigns:       "ViewerDropsDashboard",
+		OperationRewardCampaigns: "ViewerDropsDashboard",
 		OperationCampaignDetails: "DropCampaignDetails",
 		OperationCurrentDrop:     "DropCurrentSessionContext",
 		OperationGetStreamInfo:   "VideoPlayerStreamInfoOverlayChannel",
@@ -29,6 +30,29 @@ func TestRegistryIncludesCoreSliceOperations(t *testing.T) {
 		if operation.Extensions.PersistedQuery.SHA256Hash == "" {
 			t.Fatalf("%s 的 persisted query hash 不能为空", key)
 		}
+	}
+}
+
+func TestRewardCampaignsOperationUsesCurrentDashboardPersistedQuery(t *testing.T) {
+	t.Parallel()
+
+	operation := MustLookup(OperationRewardCampaigns)
+	if operation.OperationName != "ViewerDropsDashboard" {
+		t.Fatalf("operationName 不匹配: %q", operation.OperationName)
+	}
+	if got := operation.Extensions.PersistedQuery.SHA256Hash; got != "d9cae7761dafab85908c85e6683cb4201b449e66ac3bb5e894f15ff12aeafaa7" {
+		t.Fatalf("RewardCampaigns hash 不匹配: %q", got)
+	}
+	if got, ok := operation.Variables["fetchRewardCampaigns"].(bool); !ok || !got {
+		t.Fatalf("RewardCampaigns 必须开启 fetchRewardCampaigns: %#v", operation.Variables)
+	}
+
+	campaigns := MustLookup(OperationCampaigns)
+	if got := campaigns.Extensions.PersistedQuery.SHA256Hash; got == operation.Extensions.PersistedQuery.SHA256Hash {
+		t.Fatal("RewardCampaigns 不能替换普通 Campaigns hash，否则普通 drops 可能丢失")
+	}
+	if got, ok := campaigns.Variables["fetchRewardCampaigns"].(bool); !ok || got {
+		t.Fatalf("普通 Campaigns 必须继续关闭 fetchRewardCampaigns: %#v", campaigns.Variables)
 	}
 }
 

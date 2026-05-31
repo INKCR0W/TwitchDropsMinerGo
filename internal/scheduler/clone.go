@@ -70,17 +70,18 @@ func cloneCampaign(campaign *domain.DropsCampaign) (*domain.DropsCampaign, error
 	}
 
 	spec := domain.CampaignSpec{
-		ID:              campaign.ID,
-		Name:            campaign.Name,
-		Game:            campaign.Game,
-		Linked:          campaign.Linked,
-		LinkURL:         campaign.LinkURL,
-		ImageURL:        campaign.ImageURL,
-		StartsAt:        campaign.StartsAt,
-		EndsAt:          campaign.EndsAt,
-		Status:          campaignStatus(campaign),
-		AllowedChannels: cloneChannels(campaign.AllowedChannels),
-		Drops:           make([]domain.TimedDropSpec, 0, len(campaign.TimedDrops)),
+		ID:               campaign.ID,
+		Name:             campaign.Name,
+		Game:             campaign.Game,
+		Linked:           campaign.Linked,
+		LinkURL:          campaign.LinkURL,
+		ImageURL:         campaign.ImageURL,
+		StartsAt:         campaign.StartsAt,
+		EndsAt:           campaign.EndsAt,
+		Status:           campaignStatus(campaign),
+		IsRewardCampaign: campaign.IsRewardCampaign,
+		AllowedChannels:  cloneChannels(campaign.AllowedChannels),
+		Drops:            make([]domain.TimedDropSpec, 0, len(campaign.TimedDrops)),
 	}
 
 	for _, drop := range campaign.Drops() {

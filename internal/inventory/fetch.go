@@ -108,6 +108,52 @@ func (r *Refresher) fetchAvailableCampaigns(ctx context.Context) ([]campaignEnve
 	return availableCampaigns, nil
 }
 
+func (r *Refresher) fetchRewardCampaigns(ctx context.Context, now time.Time) (map[string]any, error) {
+	response, err := r.gqlClient.Do(ctx, gql.MustLookup(gql.OperationRewardCampaigns))
+	if err != nil {
+		return nil, fmt.Errorf("请求 RewardCampaigns 失败: %w", err)
+	}
+
+	data, err := asMap(response.Data, "RewardCampaigns.data")
+	if err != nil {
+		return nil, fmt.Errorf("解析 RewardCampaigns 响应失败: %w", err)
+	}
+
+	roots := []map[string]any{data}
+	if currentUser := optionalMap(data["currentUser"]); len(currentUser) > 0 {
+		roots = append(roots, currentUser)
+	}
+
+	rewardPayload := make(map[string]any)
+	seen := make(map[string]struct{})
+	for _, root := range roots {
+		campaigns, err := collectRewardCampaigns(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, campaign := range campaigns {
+			converted, ok, err := rewardCampaignToDropCampaign(campaign, now)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			convertedID := stringValue(converted, "id")
+			if _, exists := seen[convertedID]; exists {
+				continue
+			}
+			seen[convertedID] = struct{}{}
+			if !isApplicableRewardStatus(stringValue(converted, "status")) {
+				continue
+			}
+			rewardPayload[convertedID] = converted
+		}
+	}
+
+	return rewardPayload, nil
+}
+
 func (r *Refresher) fetchCampaignDetails(ctx context.Context, userID int64, inventoryPayload map[string]any, availableCampaigns []campaignEnvelope) (map[string]any, error) {
 	if len(availableCampaigns) == 0 {
 		return cloneMap(inventoryPayload), nil

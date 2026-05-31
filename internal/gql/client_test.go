@@ -401,6 +401,118 @@ func TestClientNullifiesAllServerErrorPaths(t *testing.T) {
 	}
 }
 
+func TestClientAllowsIntegrityErrorWithPartialData(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"data":{"rewardCampaignsAvailableToUser":[{"id":"reward-campaign-1"}]},
+			"errors":[{"message":"failed integrity check"}],
+			"extensions":{"operationName":"ViewerDropsDashboard"}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	response, err := client.Do(context.Background(), MustLookup(OperationCampaigns))
+	if err != nil {
+		t.Fatalf("带 partial data 的 integrity error 应被放行: %v", err)
+	}
+	data, ok := response.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("响应 data 类型不匹配: %T", response.Data)
+	}
+	if _, ok := data["rewardCampaignsAvailableToUser"]; !ok {
+		t.Fatalf("partial data 应保留: %#v", data)
+	}
+}
+
+func TestClientStillReportsTopLevelErrorWithIntegrityPartialData(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"data":{"rewardCampaignsAvailableToUser":[]},
+			"errors":[{"message":"failed integrity check"}],
+			"error":"Unauthorized",
+			"message":"missing token",
+			"extensions":{"operationName":"ViewerDropsDashboard"}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	_, err = client.Do(context.Background(), MustLookup(OperationCampaigns))
+	if !IsRequestError(err) {
+		t.Fatalf("即使 integrity error 可降级，顶层 error 仍应失败，实际为 %v", err)
+	}
+}
+
+func TestClientRejectsIntegrityErrorWithoutData(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"errors":[{"message":"failed integrity check"}],
+			"extensions":{"operationName":"ViewerDropsDashboard"}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	_, err = client.Do(context.Background(), MustLookup(OperationCampaigns))
+	if !IsRequestError(err) {
+		t.Fatalf("无 data 的 integrity error 仍应失败，实际为 %v", err)
+	}
+}
+
+func TestClientRejectsIntegrityErrorMixedWithUnknownError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"data":{"rewardCampaignsAvailableToUser":[]},
+			"errors":[{"message":"failed integrity check"},{"message":"server rejected request"}],
+			"extensions":{"operationName":"ViewerDropsDashboard"}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	_, err = client.Do(context.Background(), MustLookup(OperationCampaigns))
+	if !IsRequestError(err) {
+		t.Fatalf("混合未知错误不应被 integrity partial-data 规则吞掉，实际为 %v", err)
+	}
+}
+
 func TestClientReturnsRequestErrorAfterSingleRetryIsConsumed(t *testing.T) {
 	t.Parallel()
 

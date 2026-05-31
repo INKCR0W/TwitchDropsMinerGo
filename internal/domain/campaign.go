@@ -10,17 +10,18 @@ import (
 )
 
 type CampaignSpec struct {
-	ID              string
-	Name            string
-	Game            Game
-	Linked          bool
-	LinkURL         string
-	ImageURL        string
-	StartsAt        time.Time
-	EndsAt          time.Time
-	Status          string
-	AllowedChannels []Channel
-	Drops           []TimedDropSpec
+	ID               string
+	Name             string
+	Game             Game
+	Linked           bool
+	LinkURL          string
+	ImageURL         string
+	StartsAt         time.Time
+	EndsAt           time.Time
+	Status           string
+	IsRewardCampaign bool
+	AllowedChannels  []Channel
+	Drops            []TimedDropSpec
 }
 
 type TimedDropSpec struct {
@@ -38,32 +39,34 @@ type TimedDropSpec struct {
 }
 
 type DropsCampaign struct {
-	ID              string
-	Name            string
-	Game            Game
-	Linked          bool
-	LinkURL         string
-	ImageURL        string
-	StartsAt        time.Time
-	EndsAt          time.Time
-	Valid           bool
-	AllowedChannels []Channel
-	TimedDrops      map[string]*TimedDrop
+	ID               string
+	Name             string
+	Game             Game
+	Linked           bool
+	LinkURL          string
+	ImageURL         string
+	StartsAt         time.Time
+	EndsAt           time.Time
+	Valid            bool
+	IsRewardCampaign bool
+	AllowedChannels  []Channel
+	TimedDrops       map[string]*TimedDrop
 }
 
 func NewCampaign(spec CampaignSpec) (*DropsCampaign, error) {
 	campaign := &DropsCampaign{
-		ID:              spec.ID,
-		Name:            spec.Name,
-		Game:            spec.Game,
-		Linked:          spec.Linked,
-		LinkURL:         spec.LinkURL,
-		ImageURL:        spec.ImageURL,
-		StartsAt:        spec.StartsAt.UTC(),
-		EndsAt:          spec.EndsAt.UTC(),
-		Valid:           !strings.EqualFold(strings.TrimSpace(spec.Status), "EXPIRED"),
-		AllowedChannels: slices.Clone(spec.AllowedChannels),
-		TimedDrops:      make(map[string]*TimedDrop, len(spec.Drops)),
+		ID:               spec.ID,
+		Name:             spec.Name,
+		Game:             spec.Game,
+		Linked:           spec.Linked,
+		LinkURL:          spec.LinkURL,
+		ImageURL:         spec.ImageURL,
+		StartsAt:         spec.StartsAt.UTC(),
+		EndsAt:           spec.EndsAt.UTC(),
+		Valid:            !strings.EqualFold(strings.TrimSpace(spec.Status), "EXPIRED"),
+		IsRewardCampaign: spec.IsRewardCampaign || strings.HasPrefix(spec.ID, "reward:"),
+		AllowedChannels:  slices.Clone(spec.AllowedChannels),
+		TimedDrops:       make(map[string]*TimedDrop, len(spec.Drops)),
 	}
 
 	for _, dropSpec := range spec.Drops {

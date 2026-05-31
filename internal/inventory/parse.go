@@ -39,16 +39,17 @@ func buildCampaign(data map[string]any, claimedBenefits map[string]time.Time) (*
 
 	selfData := optionalMap(data["self"])
 	spec := domain.CampaignSpec{
-		ID:              stringValue(data, "id"),
-		Name:            stringValue(data, "name"),
-		Game:            parseGame(gameData),
-		Linked:          boolValue(selfData, "isAccountConnected"),
-		LinkURL:         stringValue(data, "accountLinkURL"),
-		ImageURL:        normalizeBoxArtURL(stringValue(gameData, "boxArtURL")),
-		StartsAt:        timeValue(data, "startAt"),
-		EndsAt:          timeValue(data, "endAt"),
-		Status:          stringValue(data, "status"),
-		AllowedChannels: parseAllowedChannels(data["allow"]),
+		ID:               stringValue(data, "id"),
+		Name:             stringValue(data, "name"),
+		Game:             parseGame(gameData),
+		Linked:           boolValue(selfData, "isAccountConnected"),
+		LinkURL:          stringValue(data, "accountLinkURL"),
+		ImageURL:         normalizeBoxArtURL(stringValue(gameData, "boxArtURL")),
+		StartsAt:         timeValue(data, "startAt"),
+		EndsAt:           timeValue(data, "endAt"),
+		Status:           stringValue(data, "status"),
+		IsRewardCampaign: boolValue(data, "isRewardCampaign"),
+		AllowedChannels:  parseAllowedChannels(data["allow"]),
 	}
 	if spec.ID == "" {
 		return nil, fmt.Errorf("campaign id 不能为空")

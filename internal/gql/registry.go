@@ -12,6 +12,7 @@ const (
 	OperationInventory            OperationKey = "Inventory"
 	OperationCurrentDrop          OperationKey = "CurrentDrop"
 	OperationCampaigns            OperationKey = "Campaigns"
+	OperationRewardCampaigns      OperationKey = "RewardCampaigns"
 	OperationCampaignDetails      OperationKey = "CampaignDetails"
 	OperationAvailableDrops       OperationKey = "AvailableDrops"
 	OperationPlaybackAccessToken  OperationKey = "PlaybackAccessToken"
@@ -76,6 +77,13 @@ var registry = map[OperationKey]Operation{
 		"5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619",
 		map[string]any{
 			"fetchRewardCampaigns": false,
+		},
+	),
+	OperationRewardCampaigns: NewOperation(
+		"ViewerDropsDashboard",
+		"d9cae7761dafab85908c85e6683cb4201b449e66ac3bb5e894f15ff12aeafaa7",
+		map[string]any{
+			"fetchRewardCampaigns": true,
 		},
 	),
 	OperationCampaignDetails: NewOperation(

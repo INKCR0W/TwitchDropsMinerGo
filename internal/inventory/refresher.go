@@ -106,6 +106,15 @@ func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapsh
 		return Snapshot{}, err
 	}
 
+	rewardPayload, err := r.fetchRewardCampaigns(ctx, now)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	mergedPayload, err = mergeMaps(mergedPayload, rewardPayload)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("合并 RewardCampaigns 数据失败: %w", err)
+	}
+
 	campaigns, err := buildCampaigns(mergedPayload, claimedBenefits)
 	if err != nil {
 		return Snapshot{}, err

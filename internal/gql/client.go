@@ -283,6 +283,9 @@ func handleResponses(responses []Response, allowSingleRetry bool) (retry bool, c
 	for index := range responses {
 		response := &responses[index]
 		if len(response.Errors) > 0 {
+			if hasOnlyNonFatalErrors(*response) && response.Error == "" {
+				continue
+			}
 			allHandled := true
 			for _, responseError := range response.Errors {
 				switch responseError.Message {
@@ -314,6 +317,19 @@ func handleResponses(responses []Response, allowSingleRetry bool) (retry bool, c
 	}
 
 	return false, false, 0, nil
+}
+
+func hasOnlyNonFatalErrors(response Response) bool {
+	if response.Data == nil || len(response.Errors) == 0 {
+		return false
+	}
+
+	for _, responseError := range response.Errors {
+		if responseError.Message != "failed integrity check" {
+			return false
+		}
+	}
+	return true
 }
 
 func newRequestError(response Response) error {

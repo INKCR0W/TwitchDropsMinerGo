@@ -223,6 +223,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 	nextHour := now.Add(time.Hour)
 	aclChannels := make(map[int64]domain.Channel)
 	noACLGames := make(map[string]domain.Game)
+	rewardNoACLGames := make(map[string]domain.Game)
 
 	earnableFound := false
 	for _, campaign := range snapshot.Inventory {
@@ -240,6 +241,10 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 				}
 				aclChannels[channel.ID] = channel
 			}
+			continue
+		}
+		if campaign.IsRewardCampaign {
+			rewardNoACLGames[gameKey(campaign.Game)] = campaign.Game
 			continue
 		}
 		noACLGames[gameKey(campaign.Game)] = campaign.Game
@@ -284,6 +289,25 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 			return err
 		}
 		for _, channel := range channels {
+			s.upsertChannel(channel)
+			newChannels[channel.ID] = channel
+		}
+	}
+
+	rewardGames := make([]domain.Game, 0, len(rewardNoACLGames))
+	for _, game := range rewardNoACLGames {
+		rewardGames = append(rewardGames, game)
+	}
+	s.sortGamesByPriority(rewardGames, wantedGames)
+	for _, game := range rewardGames {
+		channels, err := s.getLiveStreams(ctx, game, s.directoryLimit, false)
+		if err != nil {
+			return err
+		}
+		for _, channel := range channels {
+			if existing, exists := newChannels[channel.ID]; exists && existing.Stream != nil && existing.Stream.DropsEnabled && channel.Stream != nil {
+				channel.Stream.DropsEnabled = true
+			}
 			s.upsertChannel(channel)
 			newChannels[channel.ID] = channel
 		}
