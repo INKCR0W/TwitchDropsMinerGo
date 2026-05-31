@@ -337,6 +337,70 @@ func TestClientTurnsServerErrorPathIntoNil(t *testing.T) {
 	}
 }
 
+func TestClientReturnsErrorWhenServerErrorIsMixedWithUnknownError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"data":{"currentUser":{"dropCampaigns":[{"id":"1"},{"id":"2"}]}},
+			"errors":[
+				{"message":"server error","path":["currentUser","dropCampaigns",1]},
+				{"message":"Unauthorized"}
+			],
+			"extensions":{"operationName":"ViewerDropsDashboard"}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	_, err = client.Do(context.Background(), MustLookup(OperationCampaigns))
+	if !IsRequestError(err) {
+		t.Fatalf("混合未知错误应返回 RequestError，实际为 %v", err)
+	}
+}
+
+func TestClientNullifiesAllServerErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"data":{"currentUser":{"dropCampaigns":[{"id":"1"},{"id":"2"},{"id":"3"}]}},
+			"errors":[
+				{"message":"server error","path":["currentUser","dropCampaigns",0]},
+				{"message":"server error","path":["currentUser","dropCampaigns",2]}
+			],
+			"extensions":{"operationName":"ViewerDropsDashboard"}
+		}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	response, err := client.Do(context.Background(), MustLookup(OperationCampaigns))
+	if err != nil {
+		t.Fatalf("纯 server error path 应被降级处理: %v", err)
+	}
+	data := response.Data.(map[string]any)
+	currentUser := data["currentUser"].(map[string]any)
+	dropCampaigns := currentUser["dropCampaigns"].([]any)
+	if dropCampaigns[0] != nil || dropCampaigns[2] != nil {
+		t.Fatalf("所有 server error path 都应置空: %#v", dropCampaigns)
+	}
+}
+
 func TestClientReturnsRequestErrorAfterSingleRetryIsConsumed(t *testing.T) {
 	t.Parallel()
 

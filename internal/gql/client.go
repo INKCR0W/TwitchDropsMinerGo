@@ -283,26 +283,25 @@ func handleResponses(responses []Response, allowSingleRetry bool) (retry bool, c
 	for index := range responses {
 		response := &responses[index]
 		if len(response.Errors) > 0 {
-			handled := false
+			allHandled := true
 			for _, responseError := range response.Errors {
 				switch responseError.Message {
 				case "service error", "PersistedQueryNotFound":
 					if allowSingleRetry {
 						return true, true, forcedRetryDelay, nil
 					}
+					allHandled = false
 				case "server error":
 					if err := nullifyPath(response, responseError.Path); err != nil {
 						return false, false, 0, err
 					}
-					handled = true
 				case "service timeout", "service unavailable", "context deadline exceeded":
 					return true, false, 0, nil
-				}
-				if handled {
-					break
+				default:
+					allHandled = false
 				}
 			}
-			if !handled {
+			if !allHandled {
 				return false, false, 0, newRequestError(*response)
 			}
 		}
