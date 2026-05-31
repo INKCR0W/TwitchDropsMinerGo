@@ -89,6 +89,74 @@ func TestClientRetriesServerErrors(t *testing.T) {
 	}
 }
 
+func TestClientStopsRetryingAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "still failing", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	client, err := New(Options{
+		Settings:    config.Settings{ConnectionQuality: 1},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+		Backoff: BackoffConfig{
+			Base:     2,
+			Variance: 0,
+			Maximum:  time.Millisecond,
+		},
+		Sleep: func(context.Context, time.Duration) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	_, err = client.Do(context.Background(), Request{
+		Method: http.MethodGet,
+		URL:    server.URL,
+	})
+	if err == nil {
+		t.Fatal("持续 5xx 后应返回错误")
+	}
+	if got := attempts.Load(); got != int32(DefaultMaxAttempts) {
+		t.Fatalf("重试次数不匹配: got=%d want=%d", got, DefaultMaxAttempts)
+	}
+	if !strings.Contains(err.Error(), "达到最大重试次数") {
+		t.Fatalf("错误信息应说明达到最大重试次数: %v", err)
+	}
+}
+
+func TestClientDoesNotRetryCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client, err := New(Options{
+		Settings:    config.Settings{ConnectionQuality: 1},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+		Sleep: func(context.Context, time.Duration) error {
+			t.Fatal("context 已取消时不应进入 Sleep 重试")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	_, err = client.Do(ctx, Request{
+		Method: http.MethodGet,
+		URL:    "http://127.0.0.1:1",
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("应返回 context.Canceled，实际为 %v", err)
+	}
+}
+
 func TestClientLogsRetryDetailsWithoutQueryString(t *testing.T) {
 	t.Parallel()
 

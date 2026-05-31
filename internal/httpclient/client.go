@@ -20,6 +20,8 @@ import (
 
 var ErrRequestInvalid = errors.New("请求已失效")
 
+const DefaultMaxAttempts = 5
+
 type ClientInfo struct {
 	ClientURL string
 	ClientID  string
@@ -40,6 +42,7 @@ type Options struct {
 	Backoff     BackoffConfig
 	Clock       func() time.Time
 	Sleep       func(context.Context, time.Duration) error
+	MaxAttempts int
 }
 
 type Client struct {
@@ -52,6 +55,7 @@ type Client struct {
 	backoff        BackoffConfig
 	now            func() time.Time
 	sleep          func(context.Context, time.Duration) error
+	maxAttempts    int
 }
 
 type Request struct {
@@ -109,6 +113,11 @@ func New(options Options) (*Client, error) {
 		return nil, err
 	}
 
+	maxAttempts := options.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = DefaultMaxAttempts
+	}
+
 	quality := clampConnectionQuality(options.Settings.ConnectionQuality)
 	connectTimeout := time.Duration(5*quality) * time.Second
 	requestTimeout := time.Duration(10*quality) * time.Second
@@ -151,6 +160,7 @@ func New(options Options) (*Client, error) {
 		backoff:        backoff,
 		now:            now,
 		sleep:          sleep,
+		maxAttempts:    maxAttempts,
 	}, nil
 }
 
@@ -195,6 +205,9 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 	attempt := 0
 	for {
 		attempt++
+		if err := ctx.Err(); err != nil {
+			return Response{}, err
+		}
 		if c.shouldInvalidate(request.InvalidateAfter) {
 			return Response{}, ErrRequestInvalid
 		}
@@ -210,6 +223,9 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 			if !isRetryableRequestError(err) {
 				return Response{}, fmt.Errorf("请求失败: %w", err)
 			}
+			if c.retryExhausted(attempt) {
+				return Response{}, fmt.Errorf("HTTP 请求达到最大重试次数 %d: %w", c.maxAttempts, err)
+			}
 			delay := backoff.Next()
 			c.logRetry(method, request.URL, attempt, delay, 0, err)
 			if err := c.sleep(ctx, delay); err != nil {
@@ -222,6 +238,9 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 				if response.StatusCode < 500 {
 					return response, nil
 				}
+				if c.retryExhausted(attempt) {
+					return Response{}, fmt.Errorf("HTTP 请求达到最大重试次数 %d: 状态码 %d", c.maxAttempts, response.StatusCode)
+				}
 				delay := backoff.Next()
 				c.logRetry(method, request.URL, attempt, delay, response.StatusCode, nil)
 				if err := c.sleep(ctx, delay); err != nil {
@@ -230,6 +249,9 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 				continue
 			} else if !isRetryableRequestError(readErr) {
 				return Response{}, fmt.Errorf("读取响应失败: %w", readErr)
+			}
+			if c.retryExhausted(attempt) {
+				return Response{}, fmt.Errorf("HTTP 请求达到最大重试次数 %d: %w", c.maxAttempts, readErr)
 			}
 			delay := backoff.Next()
 			c.logRetry(method, request.URL, attempt, delay, 0, readErr)
@@ -303,12 +325,20 @@ func (c *Client) shouldInvalidate(invalidateAfter time.Time) bool {
 	return !c.now().UTC().Add(c.requestTimeout).Before(invalidateAfter.UTC())
 }
 
+func (c *Client) retryExhausted(attempt int) bool {
+	if c == nil || c.maxAttempts <= 0 {
+		return false
+	}
+
+	return attempt >= c.maxAttempts
+}
+
 func isRetryableRequestError(err error) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return true
+		return false
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
