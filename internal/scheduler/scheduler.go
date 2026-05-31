@@ -20,6 +20,7 @@ const (
 	DefaultWatchInterval     = 59 * time.Second
 	DefaultProgressDelay     = 20 * time.Second
 	DefaultMaintenanceReload = time.Hour
+	DefaultErrorRetryDelay   = time.Minute
 	DefaultClaimSweepTimeout = 30 * time.Second
 	defaultDirectoryLimit    = 20
 )
@@ -84,6 +85,7 @@ type Options struct {
 	WatchInterval     time.Duration
 	ProgressDelay     time.Duration
 	MaintenanceReload time.Duration
+	ErrorRetryDelay   time.Duration
 	DirectoryLimit    int
 	MaxChannels       int
 	ClaimSweepTimeout time.Duration
@@ -117,6 +119,7 @@ type Scheduler struct {
 	watchInterval     time.Duration
 	progressDelay     time.Duration
 	maintenanceReload time.Duration
+	errorRetryDelay   time.Duration
 	directoryLimit    int
 	maxChannels       int
 	claimSweepTimeout time.Duration
@@ -130,6 +133,7 @@ type Scheduler struct {
 	selectedChannelID int64
 	watchingChannelID int64
 	lastProgressAt    time.Time
+	lastRuntimeError  error
 	maintenanceCancel context.CancelFunc
 	userTopicUserID   int64
 

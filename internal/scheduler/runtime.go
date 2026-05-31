@@ -60,6 +60,11 @@ func New(options Options) (*Scheduler, error) {
 		maintenanceReload = DefaultMaintenanceReload
 	}
 
+	errorRetryDelay := options.ErrorRetryDelay
+	if errorRetryDelay <= 0 {
+		errorRetryDelay = DefaultErrorRetryDelay
+	}
+
 	directoryLimit := options.DirectoryLimit
 	if directoryLimit <= 0 {
 		directoryLimit = defaultDirectoryLimit
@@ -93,6 +98,7 @@ func New(options Options) (*Scheduler, error) {
 		watchInterval:     watchInterval,
 		progressDelay:     progressDelay,
 		maintenanceReload: maintenanceReload,
+		errorRetryDelay:   errorRetryDelay,
 		directoryLimit:    directoryLimit,
 		maxChannels:       maxChannels,
 		claimSweepTimeout: claimSweepTimeout,

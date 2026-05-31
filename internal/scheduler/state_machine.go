@@ -50,17 +50,23 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			s.handleIdle()
 		case StateInventoryFetch:
 			if err := s.handleInventoryFetch(ctx); err != nil {
-				return err
+				if retryErr := s.handleRuntimeError(ctx, StateInventoryFetch, err); retryErr != nil {
+					return retryErr
+				}
 			}
 		case StateGamesUpdate:
 			if err := s.handleGamesUpdate(ctx); err != nil {
-				return err
+				if retryErr := s.handleRuntimeError(ctx, StateGamesUpdate, err); retryErr != nil {
+					return retryErr
+				}
 			}
 		case StateChannelsCleanup:
 			s.handleChannelsCleanup()
 		case StateChannelsFetch:
 			if err := s.handleChannelsFetch(ctx); err != nil {
-				return err
+				if retryErr := s.handleRuntimeError(ctx, StateChannelsFetch, err); retryErr != nil {
+					return retryErr
+				}
 			}
 		case StateChannelSwitch:
 			s.handleChannelSwitch()
@@ -121,6 +127,7 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 		return fmt.Errorf("订阅用户 PubSub topic 失败: %w", err)
 	}
 	s.logger.Info("inventory 已装载，准备进入游戏筛选阶段")
+	s.clearRuntimeError()
 	s.restartMaintenance(ctx, snapshot.MaintenanceTriggers)
 	s.ChangeState(StateGamesUpdate)
 	return nil
@@ -152,6 +159,7 @@ func (s *Scheduler) handleGamesUpdate(ctx context.Context) error {
 	s.logger.Info("游戏筛选完成", "wanted_game_count", len(wantedGames))
 
 	s.restartWatching()
+	s.clearRuntimeError()
 	s.ChangeState(StateChannelsCleanup)
 	return nil
 }
@@ -351,8 +359,46 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 		}
 	}
 
+	s.clearRuntimeError()
 	s.ChangeState(StateChannelSwitch)
 	return nil
+}
+
+func (s *Scheduler) hasInventorySnapshot() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.snapshot.Inventory) > 0 || len(s.snapshot.Campaigns) > 0 || len(s.snapshot.Drops) > 0
+}
+
+func (s *Scheduler) handleRuntimeError(ctx context.Context, state State, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !s.hasInventorySnapshot() && state == StateInventoryFetch {
+		return err
+	}
+
+	s.logger.Warn(
+		"调度步骤失败，保留当前状态并退避重试",
+		"state", state,
+		"error", err,
+		"retry_delay", s.errorRetryDelay.String(),
+	)
+	s.mu.Lock()
+	s.lastRuntimeError = err
+	s.mu.Unlock()
+
+	if sleepErr := s.sleep(ctx, s.errorRetryDelay); sleepErr != nil {
+		return sleepErr
+	}
+	s.ChangeState(state)
+	return nil
+}
+
+func (s *Scheduler) clearRuntimeError() {
+	s.mu.Lock()
+	s.lastRuntimeError = nil
+	s.mu.Unlock()
 }
 
 func (s *Scheduler) handleChannelSwitch() {

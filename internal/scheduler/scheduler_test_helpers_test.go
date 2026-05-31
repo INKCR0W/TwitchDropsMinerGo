@@ -30,6 +30,7 @@ type testSchedulerOptions struct {
 	watchInterval     time.Duration
 	progressDelay     time.Duration
 	maintenanceReload time.Duration
+	errorRetryDelay   time.Duration
 	claimSweepTimeout time.Duration
 }
 
@@ -79,6 +80,7 @@ func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
 		WatchInterval:     options.watchInterval,
 		ProgressDelay:     options.progressDelay,
 		MaintenanceReload: options.maintenanceReload,
+		ErrorRetryDelay:   options.errorRetryDelay,
 		ClaimSweepTimeout: options.claimSweepTimeout,
 	})
 	if err != nil {
