@@ -188,6 +188,48 @@ func TestLocalStateSyncPersistsObservation(t *testing.T) {
 	}
 }
 
+func TestLocalStateSyncContinuesAfterWriteError(t *testing.T) {
+	t.Parallel()
+
+	target := &flakyStateTarget{}
+	syncer := newLocalStateSync(
+		target,
+		stubAuthSnapshotProvider{},
+		stubSchedulerStateProvider{},
+	)
+	syncer.interval = time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- syncer.Run(ctx)
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		target.mu.Lock()
+		calls := target.calls
+		target.mu.Unlock()
+		if calls >= 2 {
+			cancel()
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("状态同步不应因首次写失败退出: %v", err)
+		case <-deadline:
+			t.Fatal("状态同步没有重试")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("取消后应正常退出，实际: %v", err)
+	}
+}
+
 func TestRunServiceStopsOnCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -308,6 +350,33 @@ func (s *stubLocalStateTarget) UpdateObservation(observation app.Observation) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.observations = append(s.observations, observation)
+	return nil
+}
+
+type flakyStateTarget struct {
+	settings config.Settings
+	mu       sync.Mutex
+	calls    int
+}
+
+func (f *flakyStateTarget) Settings() config.Settings {
+	if f == nil {
+		return config.DefaultSettings()
+	}
+	settings := f.settings.Clone()
+	if settings.IsZero() {
+		settings = config.DefaultSettings()
+	}
+	return settings
+}
+
+func (f *flakyStateTarget) UpdateObservation(app.Observation) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.calls == 1 {
+		return errors.New("disk full")
+	}
 	return nil
 }
 

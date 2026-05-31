@@ -70,9 +70,8 @@ func (s *localStateSync) Run(ctx context.Context) error {
 		s.now = time.Now
 	}
 
-	if err := s.sync(); err != nil {
-		return err
-	}
+	// 状态文件只是本地观测输出，写入失败不应停止主调度；后续 tick 会继续重试。
+	_ = s.sync()
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -82,9 +81,7 @@ func (s *localStateSync) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := s.sync(); err != nil {
-				return err
-			}
+			_ = s.sync()
 		}
 	}
 }
