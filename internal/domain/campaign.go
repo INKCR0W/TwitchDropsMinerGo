@@ -99,7 +99,56 @@ func NewCampaign(spec CampaignSpec) (*DropsCampaign, error) {
 		campaign.TimedDrops[drop.ID] = drop
 	}
 
+	if err := campaign.validatePreconditions(); err != nil {
+		return nil, err
+	}
 	return campaign, nil
+}
+
+func (c *DropsCampaign) validatePreconditions() error {
+	const (
+		unvisited = 0
+		visiting  = 1
+		visited   = 2
+	)
+
+	state := make(map[string]int, len(c.TimedDrops))
+	var visit func(string) error
+	visit = func(dropID string) error {
+		switch state[dropID] {
+		case visiting:
+			return fmt.Errorf("drop precondition 存在循环: %s", dropID)
+		case visited:
+			return nil
+		}
+
+		drop := c.TimedDrops[dropID]
+		if drop == nil {
+			return fmt.Errorf("drop precondition %q 不存在", dropID)
+		}
+
+		state[dropID] = visiting
+		for _, preconditionID := range drop.PreconditionDropIDs {
+			if _, ok := c.TimedDrops[preconditionID]; !ok {
+				return fmt.Errorf("drop %q 的 precondition %q 不存在", dropID, preconditionID)
+			}
+			if err := visit(preconditionID); err != nil {
+				return err
+			}
+		}
+		state[dropID] = visited
+		return nil
+	}
+
+	for dropID := range c.TimedDrops {
+		if state[dropID] != unvisited {
+			continue
+		}
+		if err := visit(dropID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *DropsCampaign) Drop(dropID string) *TimedDrop {

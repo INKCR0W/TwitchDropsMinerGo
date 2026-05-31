@@ -111,6 +111,79 @@ func TestNewCampaignNormalizesClaimedDropAndRejectsDuplicateID(t *testing.T) {
 	}
 }
 
+func TestNewCampaignRejectsPreconditionCycles(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	_, err := NewCampaign(CampaignSpec{
+		ID:       "campaign-cycle",
+		Name:     "cycle",
+		Game:     Game{ID: 1, Name: "Game"},
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(time.Hour),
+		Drops: []TimedDropSpec{
+			{
+				ID:                  "drop-a",
+				Name:                "A",
+				StartsAt:            now.Add(-time.Hour),
+				EndsAt:              now.Add(time.Hour),
+				RequiredMinutes:     10,
+				PreconditionDropIDs: []string{"drop-a"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("自引用 precondition 应返回错误")
+	}
+
+	_, err = NewCampaign(CampaignSpec{
+		ID:       "campaign-cycle-2",
+		Name:     "cycle2",
+		Game:     Game{ID: 1, Name: "Game"},
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(time.Hour),
+		Drops: []TimedDropSpec{
+			{ID: "drop-a", Name: "A", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), RequiredMinutes: 10, PreconditionDropIDs: []string{"drop-b"}},
+			{ID: "drop-b", Name: "B", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), RequiredMinutes: 10, PreconditionDropIDs: []string{"drop-a"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("循环 precondition 应返回错误")
+	}
+}
+
+func TestNewCampaignRejectsMissingPreconditionDrop(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	_, err := NewCampaign(CampaignSpec{
+		ID:       "campaign-missing-precondition",
+		Name:     "missing",
+		Game:     Game{ID: 1, Name: "Game"},
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(time.Hour),
+		Drops: []TimedDropSpec{
+			{
+				ID:                  "drop-a",
+				Name:                "A",
+				StartsAt:            now.Add(-time.Hour),
+				EndsAt:              now.Add(time.Hour),
+				RequiredMinutes:     10,
+				PreconditionDropIDs: []string{"drop-missing"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("缺失 precondition drop 应返回错误")
+	}
+}
+
 func TestTimedDropCanEarnRespectsPreconditionsACLAndGame(t *testing.T) {
 	t.Parallel()
 
