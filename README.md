@@ -4,7 +4,7 @@ Twitch Drops 自动挂机工具的 Go 服务端实现，面向无头 24/7 部署
 
 ## 环境要求
 
-Go 1.21 或更高版本
+Go 1.26 或更高版本（以 `go.mod` 的 `go 1.26.0` 为准）。
 
 ## 使用方法
 
@@ -22,6 +22,8 @@ miner-server --runtime-dir /path/to/runtime
 | `state/state.json` | 运行时状态快照 |
 | `state/cookies.json` | 持久化认证 cookie |
 | `logs/miner-server.log` | 日志输出 |
+
+日志文件可能包含短期有效的 Device Code 授权提示和运行错误信息。建议将运行目录放在仅当前用户可读写的位置；服务端默认会限制日志文件权限并按大小轮转。
 
 ## 配置
 
