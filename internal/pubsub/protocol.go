@@ -27,6 +27,7 @@ type outboundData struct {
 
 type inboundEnvelope struct {
 	Type  string          `json:"type"`
+	Nonce string          `json:"nonce,omitempty"`
 	Data  json.RawMessage `json:"data,omitempty"`
 	Error string          `json:"error,omitempty"`
 }

@@ -20,12 +20,18 @@ type shard struct {
 	state     ShardState
 	topics    map[string]Topic
 	submitted map[string]Topic
+	pending   map[string]pendingSubmission
 	connected bool
 	conn      Connection
 	cancel    context.CancelFunc
 	done      chan struct{}
 	wake      chan struct{}
 	started   bool
+}
+
+type pendingSubmission struct {
+	action string
+	topics []string
 }
 
 func newShard(manager *Manager, index int) *shard {
@@ -35,6 +41,7 @@ func newShard(manager *Manager, index int) *shard {
 		state:     ShardStateDisconnected,
 		topics:    make(map[string]Topic),
 		submitted: make(map[string]Topic),
+		pending:   make(map[string]pendingSubmission),
 		wake:      make(chan struct{}, 1),
 	}
 }
@@ -71,6 +78,7 @@ func (s *shard) stop(clearTopics bool) {
 	if clearTopics {
 		s.topics = make(map[string]Topic)
 		s.submitted = make(map[string]Topic)
+		s.pending = make(map[string]pendingSubmission)
 		s.connected = false
 		s.state = ShardStateDisconnected
 	}
@@ -136,7 +144,7 @@ func (s *shard) run(ctx context.Context) {
 
 		backoff.Reset()
 		s.setConn(conn)
-		s.setState(ShardStateConnected, true)
+		s.setState(ShardStateConnecting, true)
 		if err := s.handleConnection(ctx, conn); err != nil && ctx.Err() == nil {
 			s.manager.logger.Warn("PubSub 连接断开，准备重连", "shard", s.index, "error", err)
 		}
@@ -166,6 +174,7 @@ func (s *shard) finishRun() {
 	s.started = false
 	s.connected = false
 	s.submitted = make(map[string]Topic)
+	s.pending = make(map[string]pendingSubmission)
 	s.state = ShardStateDisconnected
 	s.mu.Unlock()
 
@@ -195,7 +204,7 @@ func (s *shard) handleConnection(ctx context.Context, conn Connection) error {
 			return fmt.Errorf("等待 PONG 超时")
 		}
 		if !now.Before(nextPing) {
-			if err := s.send(conn, outboundEnvelope{Type: "PING"}); err != nil {
+			if _, err := s.send(conn, outboundEnvelope{Type: "PING"}); err != nil {
 				return err
 			}
 			nextPing = now.Add(s.manager.pingInterval)
@@ -241,19 +250,42 @@ func (s *shard) handleConnection(ctx context.Context, conn Connection) error {
 }
 
 func (s *shard) syncTopics(ctx context.Context, conn Connection) error {
-	currentTopics, submittedTopics := s.snapshotTopics()
+	currentTopics, submittedTopics, pendingListen, pendingUnlisten := s.snapshotTopics()
 
-	removed := make([]string, 0)
+	removedSet := make(map[string]struct{})
 	for key := range submittedTopics {
 		if _, ok := currentTopics[key]; !ok {
-			removed = append(removed, key)
+			if _, pending := pendingUnlisten[key]; pending {
+				continue
+			}
+			removedSet[key] = struct{}{}
 		}
+	}
+	for key := range pendingListen {
+		if _, ok := currentTopics[key]; ok {
+			continue
+		}
+		if _, pending := pendingUnlisten[key]; pending {
+			continue
+		}
+		removedSet[key] = struct{}{}
+	}
+
+	removed := make([]string, 0, len(removedSet))
+	for key := range removedSet {
+		removed = append(removed, key)
 	}
 	sort.Strings(removed)
 
 	added := make([]Topic, 0)
 	for key, topic := range currentTopics {
 		if _, ok := submittedTopics[key]; ok {
+			continue
+		}
+		if _, ok := pendingListen[key]; ok {
+			continue
+		}
+		if _, ok := pendingUnlisten[key]; ok {
 			continue
 		}
 		added = append(added, topic)
@@ -276,16 +308,17 @@ func (s *shard) syncTopics(ctx context.Context, conn Connection) error {
 	}
 
 	for _, batch := range chunkStrings(removed, s.manager.listenBatchSize) {
-		if err := s.send(conn, outboundEnvelope{
+		nonce, err := s.send(conn, outboundEnvelope{
 			Type: "UNLISTEN",
 			Data: &outboundData{
 				Topics:    batch,
 				AuthToken: accessToken,
 			},
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
-		s.markUnsubmitted(batch)
+		s.markPending(nonce, "UNLISTEN", batch)
 	}
 
 	if len(added) == 0 {
@@ -297,16 +330,17 @@ func (s *shard) syncTopics(ctx context.Context, conn Connection) error {
 		addedKeys = append(addedKeys, topic.Key())
 	}
 	for _, batch := range chunkStrings(addedKeys, s.manager.listenBatchSize) {
-		if err := s.send(conn, outboundEnvelope{
+		nonce, err := s.send(conn, outboundEnvelope{
 			Type: "LISTEN",
 			Data: &outboundData{
 				Topics:    batch,
 				AuthToken: accessToken,
 			},
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
-		s.markSubmitted(batch, currentTopics)
+		s.markPending(nonce, "LISTEN", batch)
 	}
 
 	return nil
@@ -346,8 +380,8 @@ func (s *shard) handleInbound(ctx context.Context, messageType int, payload []by
 	case "PONG":
 		return true, false, nil
 	case "RESPONSE":
-		if envelope.Error != "" {
-			s.manager.logger.Warn("PubSub 返回响应错误", "shard", s.index, "error", envelope.Error)
+		if err := s.resolvePending(envelope.Nonce, envelope.Error); err != nil {
+			return false, false, err
 		}
 	case "RECONNECT":
 		return false, true, nil
@@ -395,25 +429,27 @@ func (s *shard) dispatchMessage(ctx context.Context, payload json.RawMessage) er
 	return nil
 }
 
-func (s *shard) send(conn Connection, envelope outboundEnvelope) error {
+func (s *shard) send(conn Connection, envelope outboundEnvelope) (string, error) {
 	if conn == nil {
-		return fmt.Errorf("PubSub 连接不存在")
+		return "", fmt.Errorf("PubSub 连接不存在")
 	}
+	nonce := ""
 	if envelope.Type != "PING" {
-		nonce, err := s.manager.nonceGenerator()
+		generated, err := s.manager.nonceGenerator()
 		if err != nil {
-			return err
+			return "", err
 		}
+		nonce = generated
 		envelope.Nonce = nonce
 	}
 	if err := conn.SetWriteDeadline(s.manager.now().Add(s.manager.pingTimeout)); err != nil {
-		return err
+		return "", err
 	}
 	if err := conn.WriteJSON(envelope); err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
+	return nonce, nil
 }
 
 func (s *shard) status() ShardStatus {
@@ -496,6 +532,7 @@ func (s *shard) clearAndDrainTopics() []Topic {
 	}
 	s.topics = make(map[string]Topic)
 	s.submitted = make(map[string]Topic)
+	s.pending = make(map[string]pendingSubmission)
 	s.connected = false
 	return drained
 }
@@ -512,6 +549,7 @@ func (s *shard) setConn(conn Connection) {
 	s.mu.Lock()
 	s.conn = conn
 	s.submitted = make(map[string]Topic)
+	s.pending = make(map[string]pendingSubmission)
 	s.mu.Unlock()
 }
 
@@ -520,11 +558,12 @@ func (s *shard) clearConn() {
 	s.conn = nil
 	s.connected = false
 	s.submitted = make(map[string]Topic)
+	s.pending = make(map[string]pendingSubmission)
 	s.mu.Unlock()
 	s.manager.signalChanged()
 }
 
-func (s *shard) snapshotTopics() (map[string]Topic, map[string]Topic) {
+func (s *shard) snapshotTopics() (map[string]Topic, map[string]Topic, map[string]struct{}, map[string]struct{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -536,8 +575,20 @@ func (s *shard) snapshotTopics() (map[string]Topic, map[string]Topic) {
 	for key, topic := range s.submitted {
 		submitted[key] = topic
 	}
+	pendingListen := make(map[string]struct{})
+	pendingUnlisten := make(map[string]struct{})
+	for _, pending := range s.pending {
+		for _, key := range pending.topics {
+			switch pending.action {
+			case "LISTEN":
+				pendingListen[key] = struct{}{}
+			case "UNLISTEN":
+				pendingUnlisten[key] = struct{}{}
+			}
+		}
+	}
 
-	return current, submitted
+	return current, submitted, pendingListen, pendingUnlisten
 }
 
 func (s *shard) lookupTopic(key string) (Topic, bool) {
@@ -554,6 +605,63 @@ func (s *shard) markUnsubmitted(keys []string) {
 	for _, key := range keys {
 		delete(s.submitted, key)
 	}
+}
+
+func (s *shard) markPending(nonce string, action string, topics []string) {
+	if nonce == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.pending == nil {
+		s.pending = make(map[string]pendingSubmission)
+	}
+	s.pending[nonce] = pendingSubmission{
+		action: action,
+		topics: append([]string(nil), topics...),
+	}
+}
+
+func (s *shard) resolvePending(nonce string, responseErr string) error {
+	if nonce == "" {
+		if responseErr != "" {
+			return fmt.Errorf("PubSub RESPONSE 错误: %s", responseErr)
+		}
+		return nil
+	}
+
+	s.mu.Lock()
+	pending, ok := s.pending[nonce]
+	if ok {
+		delete(s.pending, nonce)
+	}
+	currentTopics := make(map[string]Topic, len(s.topics))
+	for key, topic := range s.topics {
+		currentTopics[key] = topic
+	}
+	s.mu.Unlock()
+
+	if responseErr != "" {
+		action := pending.action
+		if action == "" {
+			action = "请求"
+		}
+		return fmt.Errorf("PubSub %s 被拒绝: %s", action, responseErr)
+	}
+	if !ok {
+		return nil
+	}
+
+	switch pending.action {
+	case "LISTEN":
+		s.markSubmitted(pending.topics, currentTopics)
+	case "UNLISTEN":
+		s.markUnsubmitted(pending.topics)
+	}
+	s.refreshConnectedState()
+	return nil
 }
 
 func (s *shard) markSubmitted(keys []string, current map[string]Topic) {
@@ -573,6 +681,22 @@ func (s *shard) markSubmitted(keys []string, current map[string]Topic) {
 		}
 		s.submitted[key] = topic
 	}
+}
+
+func (s *shard) refreshConnectedState() {
+	s.mu.Lock()
+	connected := s.conn != nil
+	if connected && len(s.topics) != len(s.submitted) {
+		connected = false
+	}
+	s.connected = connected
+	if connected {
+		s.state = ShardStateConnected
+	} else if s.conn != nil {
+		s.state = ShardStateConnecting
+	}
+	s.mu.Unlock()
+	s.manager.signalChanged()
 }
 
 func (s *shard) wakeChan() <-chan struct{} {

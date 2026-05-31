@@ -262,7 +262,7 @@ func (m *Manager) WaitUntilConnected(ctx context.Context) error {
 			if shard.TopicCount == 0 {
 				continue
 			}
-			if !shard.Connected {
+			if !shard.Connected || shard.SubmittedCount != shard.TopicCount {
 				allConnected = false
 				break
 			}

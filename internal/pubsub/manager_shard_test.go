@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -54,19 +55,14 @@ func TestManagerBatchesListenAndUnlistenCommands(t *testing.T) {
 		}
 	}()
 
-	if err := manager.WaitUntilConnected(context.Background()); err != nil {
-		t.Fatalf("WaitUntilConnected 返回错误: %v", err)
-	}
-
+	listen1 := conn.waitForType(t, "LISTEN", time.Second)
+	listen2 := conn.waitForType(t, "LISTEN", time.Second)
 	if dialer.CallCount() != 1 {
 		t.Fatalf("Dial 次数不匹配: %d", dialer.CallCount())
 	}
 	if got := dialer.Header(0).Get("X-Device-Id"); got != "device-1" {
 		t.Fatalf("握手请求头未透传: %q", got)
 	}
-
-	listen1 := conn.waitForType(t, "LISTEN", time.Second)
-	listen2 := conn.waitForType(t, "LISTEN", time.Second)
 	listenBatches := [][]string{
 		topicsFromEnvelope(t, listen1),
 		topicsFromEnvelope(t, listen2),
@@ -79,6 +75,17 @@ func TestManagerBatchesListenAndUnlistenCommands(t *testing.T) {
 	}
 	assertAuthTokenAndNonce(t, listen1, "token-1")
 	assertAuthTokenAndNonce(t, listen2, "token-1")
+	conn.pushText(t, map[string]any{
+		"type":  "RESPONSE",
+		"nonce": listen1["nonce"],
+	})
+	conn.pushText(t, map[string]any{
+		"type":  "RESPONSE",
+		"nonce": listen2["nonce"],
+	})
+	if err := manager.WaitUntilConnected(context.Background()); err != nil {
+		t.Fatalf("WaitUntilConnected 返回错误: %v", err)
+	}
 
 	manager.RemoveTopics(topics[0].Key(), topics[1].Key())
 
@@ -87,6 +94,118 @@ func TestManagerBatchesListenAndUnlistenCommands(t *testing.T) {
 		t.Fatalf("UNLISTEN 分批大小不匹配: %#v", unlisten)
 	}
 	assertAuthTokenAndNonce(t, unlisten, "token-1")
+}
+
+func TestShardDefersSubmittedUntilListenAck(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, Options{
+		Auth: &stubAuthState{
+			snapshot: auth.Snapshot{AccessToken: "token-ack"},
+		},
+		PingInterval: time.Hour,
+	})
+	shard := newShard(manager, 0)
+	topic := MustNewTopic(CategoryUser, TopicDrops, 123, nil)
+	if !shard.addTopic(topic, 10) {
+		t.Fatal("addTopic 应成功")
+	}
+
+	conn := newFakeConn()
+	if err := shard.syncTopics(context.Background(), conn); err != nil {
+		t.Fatalf("syncTopics 返回错误: %v", err)
+	}
+	listen := conn.waitForType(t, "LISTEN", time.Second)
+	nonce, _ := listen["nonce"].(string)
+	if nonce == "" {
+		t.Fatalf("LISTEN 应包含 nonce: %#v", listen)
+	}
+	if got := shard.status().SubmittedCount; got != 0 {
+		t.Fatalf("LISTEN ack 前不应标记 submitted，实际为 %d", got)
+	}
+	if state := shard.status().State; state != ShardStateDisconnected {
+		t.Fatalf("未运行的 shard 状态不应被 ack 刷成 connected，实际为 %s", state)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"type":  "RESPONSE",
+		"nonce": nonce,
+	})
+	if err != nil {
+		t.Fatalf("编码 RESPONSE 失败: %v", err)
+	}
+	if _, _, err := shard.handleInbound(context.Background(), textMessageType, payload); err != nil {
+		t.Fatalf("处理 RESPONSE 失败: %v", err)
+	}
+	if got := shard.status().SubmittedCount; got != 1 {
+		t.Fatalf("LISTEN ack 后应标记 submitted，实际为 %d", got)
+	}
+}
+
+func TestShardDefersUnsubmittedUntilUnlistenAck(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, Options{
+		Auth: &stubAuthState{
+			snapshot: auth.Snapshot{AccessToken: "token-unlisten-ack"},
+		},
+		PingInterval: time.Hour,
+	})
+	shard := newShard(manager, 0)
+	topic := MustNewTopic(CategoryUser, TopicDrops, 124, nil)
+	if !shard.addTopic(topic, 10) {
+		t.Fatal("addTopic 应成功")
+	}
+
+	conn := newFakeConn()
+	if err := shard.syncTopics(context.Background(), conn); err != nil {
+		t.Fatalf("LISTEN syncTopics 返回错误: %v", err)
+	}
+	listen := conn.waitForType(t, "LISTEN", time.Second)
+	listenNonce, _ := listen["nonce"].(string)
+	if listenNonce == "" {
+		t.Fatalf("LISTEN 应包含 nonce: %#v", listen)
+	}
+	listenAck, err := json.Marshal(map[string]any{
+		"type":  "RESPONSE",
+		"nonce": listenNonce,
+	})
+	if err != nil {
+		t.Fatalf("编码 LISTEN RESPONSE 失败: %v", err)
+	}
+	if _, _, err := shard.handleInbound(context.Background(), textMessageType, listenAck); err != nil {
+		t.Fatalf("处理 LISTEN RESPONSE 失败: %v", err)
+	}
+	if got := shard.status().SubmittedCount; got != 1 {
+		t.Fatalf("LISTEN ack 后应标记 submitted，实际为 %d", got)
+	}
+
+	shard.removeTopics([]string{topic.Key()})
+	if err := shard.syncTopics(context.Background(), conn); err != nil {
+		t.Fatalf("UNLISTEN syncTopics 返回错误: %v", err)
+	}
+	unlisten := conn.waitForType(t, "UNLISTEN", time.Second)
+	unlistenNonce, _ := unlisten["nonce"].(string)
+	if unlistenNonce == "" {
+		t.Fatalf("UNLISTEN 应包含 nonce: %#v", unlisten)
+	}
+	if got := shard.status().SubmittedCount; got != 1 {
+		t.Fatalf("UNLISTEN ack 前不应清除 submitted，实际为 %d", got)
+	}
+
+	unlistenAck, err := json.Marshal(map[string]any{
+		"type":  "RESPONSE",
+		"nonce": unlistenNonce,
+	})
+	if err != nil {
+		t.Fatalf("编码 UNLISTEN RESPONSE 失败: %v", err)
+	}
+	if _, _, err := shard.handleInbound(context.Background(), textMessageType, unlistenAck); err != nil {
+		t.Fatalf("处理 UNLISTEN RESPONSE 失败: %v", err)
+	}
+	if got := shard.status().SubmittedCount; got != 0 {
+		t.Fatalf("UNLISTEN ack 后应清除 submitted，实际为 %d", got)
+	}
 }
 
 func TestHandleConnectionStopsAfterReadFailure(t *testing.T) {
@@ -116,6 +235,108 @@ func TestHandleConnectionStopsAfterReadFailure(t *testing.T) {
 	}
 	if got := conn.reads.Load(); got != 1 {
 		t.Fatalf("读失败后不应再次读取同一连接，实际读取次数为 %d", got)
+	}
+}
+
+func TestShardResponseErrorClearsSubmittedAndReconnects(t *testing.T) {
+	t.Parallel()
+
+	conn1 := newFakeConn()
+	conn2 := newFakeConn()
+	dialer := &fakeDialer{connections: []*fakeConn{conn1, conn2}}
+	manager := newTestManager(t, Options{
+		Auth: &stubAuthState{
+			snapshot: auth.Snapshot{AccessToken: "token-listen"},
+		},
+		Dialer:          dialer,
+		ReadTimeout:     5 * time.Millisecond,
+		PingInterval:    time.Hour,
+		ShardTopicLimit: 10,
+		Sleep: func(context.Context, time.Duration) error {
+			return nil
+		},
+	})
+
+	topic := MustNewTopic(CategoryUser, TopicDrops, 77, nil)
+	if err := manager.AddTopics(topic); err != nil {
+		t.Fatalf("AddTopics 返回错误: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Start 返回错误: %v", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		_ = manager.Stop(stopCtx, true)
+	}()
+
+	listen := conn1.waitForType(t, "LISTEN", time.Second)
+	nonce, _ := listen["nonce"].(string)
+	if nonce == "" {
+		t.Fatalf("LISTEN 应包含 nonce: %#v", listen)
+	}
+
+	conn1.pushText(t, map[string]any{
+		"type":  "RESPONSE",
+		"nonce": nonce,
+		"error": "ERR_BADAUTH",
+	})
+
+	waitUntil(t, time.Second, func() bool {
+		return dialer.CallCount() == 2
+	})
+	_ = conn2.waitForType(t, "LISTEN", time.Second)
+}
+
+func TestManagerWaitUntilConnectedWaitsForListenAck(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeConn()
+	manager := newTestManager(t, Options{
+		Auth: &stubAuthState{
+			snapshot: auth.Snapshot{AccessToken: "token-wait"},
+		},
+		Dialer:       &fakeDialer{connections: []*fakeConn{conn}},
+		ReadTimeout:  5 * time.Millisecond,
+		PingInterval: time.Hour,
+	})
+
+	topic := MustNewTopic(CategoryUser, TopicDrops, 88, nil)
+	if err := manager.AddTopics(topic); err != nil {
+		t.Fatalf("AddTopics 返回错误: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Start 返回错误: %v", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		_ = manager.Stop(stopCtx, true)
+	}()
+
+	listen := conn.waitForType(t, "LISTEN", time.Second)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer waitCancel()
+	if err := manager.WaitUntilConnected(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LISTEN ack 前 WaitUntilConnected 应等待，实际为 %v", err)
+	}
+
+	nonce, _ := listen["nonce"].(string)
+	if nonce == "" {
+		t.Fatalf("LISTEN 应包含 nonce: %#v", listen)
+	}
+	conn.pushText(t, map[string]any{
+		"type":  "RESPONSE",
+		"nonce": nonce,
+	})
+	if err := manager.WaitUntilConnected(context.Background()); err != nil {
+		t.Fatalf("LISTEN ack 后 WaitUntilConnected 应成功，实际为 %v", err)
 	}
 }
 
