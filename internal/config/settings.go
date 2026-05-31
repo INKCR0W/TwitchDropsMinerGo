@@ -18,10 +18,12 @@ const (
 )
 
 type LoggingSettings struct {
-	Level       string `json:"level"`
-	Format      string `json:"format"`
-	FileEnabled bool   `json:"file_enabled"`
-	AddSource   bool   `json:"add_source"`
+	Level        string `json:"level"`
+	Format       string `json:"format"`
+	FileEnabled  bool   `json:"file_enabled"`
+	AddSource    bool   `json:"add_source"`
+	MaxSizeBytes int64  `json:"max_size_bytes"`
+	MaxBackups   int    `json:"max_backups"`
 }
 
 type Store interface {
@@ -57,10 +59,12 @@ func DefaultSettings() Settings {
 		TrayNotifications: true,
 		PriorityMode:      PriorityOnly,
 		Log: LoggingSettings{
-			Level:       "info",
-			Format:      "text",
-			FileEnabled: true,
-			AddSource:   false,
+			Level:        "info",
+			Format:       "text",
+			FileEnabled:  true,
+			AddSource:    false,
+			MaxSizeBytes: 10 * 1024 * 1024,
+			MaxBackups:   3,
 		},
 	}
 }
@@ -187,6 +191,13 @@ func (s *Settings) Validate() error {
 	case "text", "json":
 	default:
 		return fmt.Errorf("日志格式 %q 不受支持", s.Log.Format)
+	}
+
+	if s.Log.MaxSizeBytes < 0 {
+		return fmt.Errorf("日志最大大小不能小于 0")
+	}
+	if s.Log.MaxBackups < 0 {
+		return fmt.Errorf("日志备份数量不能小于 0")
 	}
 
 	return nil

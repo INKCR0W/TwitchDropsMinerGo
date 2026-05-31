@@ -23,7 +23,11 @@ func New(settings config.LoggingSettings, logFile string) (*slog.Logger, func() 
 			return nil, nil, fmt.Errorf("创建日志目录失败: %w", err)
 		}
 
-		file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err := rotateIfNeeded(logFile, settings.MaxSizeBytes, settings.MaxBackups); err != nil {
+			return nil, nil, err
+		}
+
+		file, err := openPrivateAppendFile(logFile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("打开日志文件失败: %w", err)
 		}
@@ -46,6 +50,40 @@ func New(settings config.LoggingSettings, logFile string) (*slog.Logger, func() 
 	}
 
 	return slog.New(handler), closeFn, nil
+}
+
+func rotateIfNeeded(path string, maxSize int64, maxBackups int) error {
+	if maxSize <= 0 || maxBackups <= 0 {
+		return nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("检查日志文件失败: %w", err)
+	}
+	if info.Size() < maxSize {
+		return nil
+	}
+
+	for i := maxBackups - 1; i >= 1; i-- {
+		src := fmt.Sprintf("%s.%d", path, i)
+		dst := fmt.Sprintf("%s.%d", path, i+1)
+		if _, err := os.Stat(src); err == nil {
+			_ = os.Remove(dst)
+			_ = os.Rename(src, dst)
+		}
+	}
+
+	backupPath := path + ".1"
+	_ = os.Remove(backupPath)
+	if err := os.Rename(path, backupPath); err != nil {
+		return fmt.Errorf("轮转日志文件失败: %w", err)
+	}
+
+	return nil
 }
 
 func parseLevel(level string) (slog.Level, error) {

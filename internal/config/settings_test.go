@@ -95,6 +95,18 @@ func TestLoadAcceptsSmartBalancePriorityMode(t *testing.T) {
 	}
 }
 
+func TestDefaultSettingsConfiguresLogRotation(t *testing.T) {
+	t.Parallel()
+
+	settings := DefaultSettings()
+	if settings.Log.MaxSizeBytes <= 0 {
+		t.Fatalf("默认日志最大大小应启用: %d", settings.Log.MaxSizeBytes)
+	}
+	if settings.Log.MaxBackups <= 0 {
+		t.Fatalf("默认日志备份数量应启用: %d", settings.Log.MaxBackups)
+	}
+}
+
 func TestSettingsCloneCopiesSlices(t *testing.T) {
 	t.Parallel()
 
