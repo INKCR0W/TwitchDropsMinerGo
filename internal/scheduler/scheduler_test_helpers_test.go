@@ -463,6 +463,12 @@ func (b *logBuffer) contains(substr string) bool {
 	return strings.Contains(b.buf.String(), substr)
 }
 
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type logSyncWriter struct {
 	b *logBuffer
 }

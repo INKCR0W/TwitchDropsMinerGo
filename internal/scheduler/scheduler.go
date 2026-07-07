@@ -141,18 +141,19 @@ type Scheduler struct {
 	claimSweepTimeout time.Duration
 	rewardPruneGrace  time.Duration
 
-	mu                sync.RWMutex
-	state             State
-	snapshot          inventory.Snapshot
-	wantedGames       []domain.Game
-	channels          map[int64]domain.Channel
-	fullCleanup       bool
-	selectedChannelID int64
-	watchingChannelID int64
-	lastProgressAt    time.Time
-	lastRuntimeError  error
-	maintenanceCancel context.CancelFunc
-	userTopicUserID   int64
+	mu                       sync.RWMutex
+	state                    State
+	snapshot                 inventory.Snapshot
+	wantedGames              []domain.Game
+	channels                 map[int64]domain.Channel
+	fullCleanup              bool
+	selectedChannelID        int64
+	watchingChannelID        int64
+	lastProgressAt           time.Time
+	lastLoggedProgressDropID string
+	lastRuntimeError         error
+	maintenanceCancel        context.CancelFunc
+	userTopicUserID          int64
 
 	stateChanged chan struct{}
 	watchSignal  chan struct{}

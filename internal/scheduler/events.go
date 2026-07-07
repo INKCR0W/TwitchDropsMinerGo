@@ -302,7 +302,9 @@ func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dr
 		return false
 	}
 
+	before := drop.CurrentMinutes()
 	drop.UpdateMinutes(currentMinutes)
+	s.logWatchProgressLocked(drop.Campaign, drop, drop.CurrentMinutes() > before)
 	s.lastProgressAt = now.UTC()
 	return true
 }
@@ -325,6 +327,7 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 	if activeCampaign.IsRewardCampaign {
 		completed := activeCampaign.BumpRewardMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
 		s.lastProgressAt = now.UTC()
+		s.logWatchProgressLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false), true)
 		if completed {
 			completed = s.recordRewardCompletedLocked(activeCampaign, now)
 		}
@@ -333,6 +336,7 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 
 	reachedLimit := activeCampaign.BumpMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
 	s.lastProgressAt = now.UTC()
+	s.logWatchProgressLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false), true)
 	return false, reachedLimit, true
 }
 

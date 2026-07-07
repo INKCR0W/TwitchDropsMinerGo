@@ -1,6 +1,68 @@
 package scheduler
 
-import "twitchdropsminergo/internal/domain"
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"twitchdropsminergo/internal/domain"
+)
+
+func (s *Scheduler) logWatchProgressLocked(campaign *domain.DropsCampaign, drop *domain.TimedDrop, advanced bool) {
+	if s == nil || campaign == nil || drop == nil {
+		return
+	}
+
+	changed := drop.ID != s.lastLoggedProgressDropID
+	if !changed && !advanced {
+		return
+	}
+
+	if changed {
+		s.lastLoggedProgressDropID = drop.ID
+		s.logger.Info(
+			"开始挂新掉落",
+			"game", gameName(campaign.Game),
+			"campaign", campaign.Name,
+			"drop", drop.Name,
+			"drop_required_minutes", drop.RequiredMinutes,
+			"campaign_required_minutes", campaign.RequiredMinutes(),
+			"campaign_remaining_minutes", campaign.RemainingMinutes(),
+			"drops_claimed", campaign.ClaimedDrops(),
+			"drops_total", campaign.TotalDrops(),
+			"drops_detail", dropsDetail(campaign),
+		)
+	}
+
+	s.logger.Info(
+		"挂机进度",
+		"game", gameName(campaign.Game),
+		"drop", drop.Name,
+		"drop_watched_minutes", drop.CurrentMinutes(),
+		"drop_required_minutes", drop.RequiredMinutes,
+		"drop_remaining_minutes", max(drop.RemainingMinutes(), 0),
+		"campaign_remaining_minutes", campaign.RemainingMinutes(),
+	)
+}
+
+func dropsDetail(campaign *domain.DropsCampaign) string {
+	drops := campaign.Drops()
+	sort.SliceStable(drops, func(i, j int) bool {
+		if drops[i].RequiredMinutes != drops[j].RequiredMinutes {
+			return drops[i].RequiredMinutes < drops[j].RequiredMinutes
+		}
+		return drops[i].ID < drops[j].ID
+	})
+
+	parts := make([]string, 0, len(drops))
+	for _, drop := range drops {
+		if drop == nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d/%d", drop.Name, drop.CurrentMinutes(), drop.RequiredMinutes))
+	}
+	return strings.Join(parts, ", ")
+}
 
 func (s *Scheduler) logWantedGamesUpdate(previous []domain.Game, current []domain.Game) {
 	if s == nil {
