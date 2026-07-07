@@ -67,21 +67,7 @@ func TestWatchLoopSendsWatchAndBumpsMinutesOnFallback(t *testing.T) {
 	})
 
 	scheduler := newTestScheduler(t, testSchedulerOptions{
-		tracker: tracker,
-		gqlClient: &fakeGQLClient{
-			doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
-				if operation.OperationName == "DropCurrentSessionContext" {
-					return gql.Response{
-						Data: map[string]any{
-							"currentUser": map[string]any{
-								"dropCurrentSession": nil,
-							},
-						},
-					}, nil
-				}
-				return gql.Response{}, nil
-			},
-		},
+		tracker:       tracker,
 		watchInterval: 2 * time.Millisecond,
 		progressDelay: time.Millisecond,
 	})

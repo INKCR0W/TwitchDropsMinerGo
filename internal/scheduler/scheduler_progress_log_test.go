@@ -77,8 +77,12 @@ func TestApplyDropProgressLogsOverviewOncePerDrop(t *testing.T) {
 	scheduler := newProgressLogScheduler(t, logs, campaign, game)
 	channel := progressLogChannel(9, game)
 
-	scheduler.applyDropProgress(now, &channel, "drop-a", 12)
-	scheduler.applyDropProgress(now, &channel, "drop-a", 13)
+	if !scheduler.applyDropProgress(now, &channel, "drop-a", 12) {
+		t.Fatalf("首次 applyDropProgress 应成功")
+	}
+	if !scheduler.applyDropProgress(now, &channel, "drop-a", 13) {
+		t.Fatalf("第二次 applyDropProgress 应成功")
+	}
 
 	if got := strings.Count(logs.String(), "开始挂新掉落"); got != 1 {
 		t.Fatalf("同一 drop 概览应只记一次, 实际 %d:\n%s", got, logs.String())

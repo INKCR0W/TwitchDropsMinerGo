@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -37,7 +36,6 @@ type GQLClient interface {
 type AuthState interface {
 	Validate(context.Context) error
 	Snapshot() auth.Snapshot
-	Headers(auth.HeadersOptions) http.Header
 }
 
 type Options struct {

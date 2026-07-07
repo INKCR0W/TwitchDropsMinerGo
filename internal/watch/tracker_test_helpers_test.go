@@ -2,7 +2,6 @@ package watch
 
 import (
 	"context"
-	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -111,26 +110,6 @@ func (f *fakeAuthState) Snapshot() auth.Snapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.snapshot
-}
-
-func (f *fakeAuthState) Headers(options auth.HeadersOptions) http.Header {
-	headers := make(http.Header)
-	if options.UserAgent != "" {
-		headers.Set("User-Agent", options.UserAgent)
-	}
-	headers.Set("Client-Id", httpclient.AndroidAppClient.ClientID)
-
-	snapshot := f.Snapshot()
-	if snapshot.SessionID != "" {
-		headers.Set("Client-Session-Id", snapshot.SessionID)
-	}
-	if snapshot.DeviceID != "" {
-		headers.Set("X-Device-Id", snapshot.DeviceID)
-	}
-	if options.GQL && snapshot.AccessToken != "" {
-		headers.Set("Authorization", "OAuth "+snapshot.AccessToken)
-	}
-	return headers
 }
 
 func mustCampaign(t *testing.T, spec domain.CampaignSpec) *domain.DropsCampaign {
