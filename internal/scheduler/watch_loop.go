@@ -97,9 +97,7 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 		}
 
 		if s.shouldResolveProgress(sentAt) {
-			if err := s.resolveProgress(ctx, channel); err != nil && !errors.Is(err, context.Canceled) {
-				s.logger.Warn("处理 watch 进度失败", "channel_id", channelID, "error", err)
-			}
+			s.resolveProgress(channel)
 		}
 
 		elapsed := s.nowUTC().Sub(sentAt)
@@ -115,27 +113,20 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 	}
 }
 
-func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel) error {
+func (s *Scheduler) resolveProgress(channel domain.Channel) {
 	now := s.nowUTC()
-
-	if dropID, currentMinutes, ok, err := s.fetchCurrentDrop(ctx, channel.ID); err != nil {
-		s.logger.Warn("CurrentDrop 查询失败，回退本地补分钟", "channel_id", channel.ID, "error", err)
-	} else if ok && s.applyDropProgress(now, &channel, dropID, currentMinutes) {
-		return nil
-	}
 
 	completedReward, reachedLimit, updated := s.bumpActiveCampaign(now, &channel)
 	if !updated {
-		return nil
+		return
 	}
 	if completedReward {
 		s.ChangeState(StateInventoryFetch)
-		return nil
+		return
 	}
 	if reachedLimit {
 		s.ChangeState(StateChannelSwitch)
 	}
-	return nil
 }
 
 func (s *Scheduler) fetchCurrentDrop(ctx context.Context, channelID int64) (string, int, bool, error) {

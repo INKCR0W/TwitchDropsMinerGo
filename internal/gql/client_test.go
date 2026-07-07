@@ -123,6 +123,53 @@ func TestClientDoAddsHeadersAndReturnsResponse(t *testing.T) {
 	}
 }
 
+func TestClientDoRawSendsInlineQuery(t *testing.T) {
+	t.Parallel()
+
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, `{"data":{"sendSpadeEvents":{"statusCode":204}}}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	response, err := client.DoRaw(context.Background(), RawQuery{
+		Query:     "mutation SendEvents { sendSpadeEvents }",
+		Variables: map[string]any{"input": map[string]any{"data": "abc"}},
+	})
+	if err != nil {
+		t.Fatalf("DoRaw 返回错误: %v", err)
+	}
+
+	var sent map[string]any
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("请求体 JSON 不合法: %v", err)
+	}
+	if sent["query"] != "mutation SendEvents { sendSpadeEvents }" {
+		t.Fatalf("query 不匹配: %#v", sent["query"])
+	}
+	if _, ok := sent["extensions"]; ok {
+		t.Fatalf("内联查询不应带 persistedQuery extensions: %#v", sent)
+	}
+
+	data, ok := response.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("响应 data 类型不匹配: %T", response.Data)
+	}
+	events, ok := data["sendSpadeEvents"].(map[string]any)
+	if !ok || events["statusCode"] != float64(204) {
+		t.Fatalf("statusCode 解析失败: %#v", data)
+	}
+}
+
 func TestClientDoBatchParsesListResponse(t *testing.T) {
 	t.Parallel()
 

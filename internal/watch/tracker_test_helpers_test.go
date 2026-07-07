@@ -17,7 +17,6 @@ import (
 
 type testTrackerOptions struct {
 	gqlClient   GQLClient
-	httpClient  HTTPClient
 	authState   AuthState
 	settings    config.Settings
 	inventory   inventory.Snapshot
@@ -40,15 +39,6 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 		}
 	}
 
-	httpClient := options.httpClient
-	if httpClient == nil {
-		httpClient = &fakeHTTPClient{
-			doFunc: func(context.Context, httpclient.Request) (httpclient.Response, error) {
-				return httpclient.Response{}, nil
-			},
-		}
-	}
-
 	authState := options.authState
 	if authState == nil {
 		authState = &fakeAuthState{
@@ -62,7 +52,6 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 
 	tracker, err := NewTracker(Options{
 		GQLClient:   gqlClient,
-		HTTPClient:  httpClient,
 		AuthState:   authState,
 		ClientInfo:  httpclient.AndroidAppClient,
 		OnlineDelay: options.onlineDelay,
@@ -84,6 +73,7 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 
 type fakeGQLClient struct {
 	doFunc      func(context.Context, gql.Operation) (gql.Response, error)
+	doRawFunc   func(context.Context, gql.RawQuery) (gql.Response, error)
 	doBatchFunc func(context.Context, []gql.Operation) ([]gql.Response, error)
 }
 
@@ -94,22 +84,18 @@ func (f *fakeGQLClient) Do(ctx context.Context, operation gql.Operation) (gql.Re
 	return f.doFunc(ctx, operation)
 }
 
+func (f *fakeGQLClient) DoRaw(ctx context.Context, query gql.RawQuery) (gql.Response, error) {
+	if f.doRawFunc == nil {
+		return gql.Response{}, nil
+	}
+	return f.doRawFunc(ctx, query)
+}
+
 func (f *fakeGQLClient) DoBatch(ctx context.Context, operations []gql.Operation) ([]gql.Response, error) {
 	if f.doBatchFunc == nil {
 		return nil, nil
 	}
 	return f.doBatchFunc(ctx, operations)
-}
-
-type fakeHTTPClient struct {
-	doFunc func(context.Context, httpclient.Request) (httpclient.Response, error)
-}
-
-func (f *fakeHTTPClient) Do(ctx context.Context, request httpclient.Request) (httpclient.Response, error) {
-	if f.doFunc == nil {
-		return httpclient.Response{}, nil
-	}
-	return f.doFunc(ctx, request)
 }
 
 type fakeAuthState struct {

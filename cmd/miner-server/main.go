@@ -174,7 +174,6 @@ func run(args []string) int {
 
 	tracker, err := watch.NewTracker(watch.Options{
 		GQLClient:  gqlClient,
-		HTTPClient: httpClient,
 		AuthState:  authState,
 		ClientInfo: clientInfo,
 	})

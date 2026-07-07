@@ -125,17 +125,8 @@ func TestWatchLoopSkipsFallbackWhenProgressUpdatedAfterSend(t *testing.T) {
 		},
 	})
 
-	currentDropCalls := 0
 	scheduler := newTestScheduler(t, testSchedulerOptions{
-		tracker: tracker,
-		gqlClient: &fakeGQLClient{
-			doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
-				if operation.OperationName == "DropCurrentSessionContext" {
-					currentDropCalls++
-				}
-				return gql.Response{}, nil
-			},
-		},
+		tracker:       tracker,
 		watchInterval: 2 * time.Millisecond,
 		progressDelay: time.Millisecond,
 	})
@@ -160,9 +151,6 @@ func TestWatchLoopSkipsFallbackWhenProgressUpdatedAfterSend(t *testing.T) {
 	if tracker.sendWatchCalls() == 0 {
 		t.Fatal("watch loop 应调用 SendWatch")
 	}
-	if currentDropCalls != 0 {
-		t.Fatalf("当前轮已收到进度更新时不应查询 CurrentDrop: %d", currentDropCalls)
-	}
 	if drop.ExtraCurrentMinutes != 0 {
 		t.Fatalf("当前轮已收到进度更新时不应补本地分钟: %d", drop.ExtraCurrentMinutes)
 	}
@@ -177,19 +165,7 @@ func TestResolveProgressRequestsSwitchWhenExtraMinutesHitLimit(t *testing.T) {
 	drop := campaign.Drop("campaign-limit-drop")
 	drop.ExtraCurrentMinutes = domain.MaxExtraMinutes - 1
 
-	scheduler := newTestScheduler(t, testSchedulerOptions{
-		gqlClient: &fakeGQLClient{
-			doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
-				return gql.Response{
-					Data: map[string]any{
-						"currentUser": map[string]any{
-							"dropCurrentSession": nil,
-						},
-					},
-				}, nil
-			},
-		},
-	})
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
 	scheduler.snapshot = snapshotFromCampaigns(campaign)
 	scheduler.wantedGames = []domain.Game{game}
 	channel := domain.Channel{
@@ -202,9 +178,7 @@ func TestResolveProgressRequestsSwitchWhenExtraMinutesHitLimit(t *testing.T) {
 		},
 	}
 
-	if err := scheduler.resolveProgress(context.Background(), channel); err != nil {
-		t.Fatalf("resolveProgress 返回错误: %v", err)
-	}
+	scheduler.resolveProgress(channel)
 	if scheduler.State() != StateChannelSwitch {
 		t.Fatalf("达到 extra minutes 上限后应请求切台: %s", scheduler.State())
 	}
@@ -268,9 +242,7 @@ func TestResolveProgressCompletesRewardCampaignWithoutCurrentDrop(t *testing.T) 
 		},
 	}
 
-	if err := scheduler.resolveProgress(context.Background(), channel); err != nil {
-		t.Fatalf("resolveProgress 返回错误: %v", err)
-	}
+	scheduler.resolveProgress(channel)
 	if scheduler.State() != StateInventoryFetch {
 		t.Fatalf("reward campaign 完成后应刷新 inventory: %s", scheduler.State())
 	}
@@ -350,9 +322,7 @@ func TestResolveProgressRetriesRewardCompletionWhenPersistFails(t *testing.T) {
 		},
 	}
 
-	if err := scheduler.resolveProgress(context.Background(), channel); err != nil {
-		t.Fatalf("首次 resolveProgress 返回错误: %v", err)
-	}
+	scheduler.resolveProgress(channel)
 	if scheduler.State() == StateInventoryFetch {
 		t.Fatal("reward 完成状态保存失败时不应刷新 inventory 丢失本地进度")
 	}
@@ -364,9 +334,7 @@ func TestResolveProgressRetriesRewardCompletionWhenPersistFails(t *testing.T) {
 	}
 
 	progressStore.err = nil
-	if err := scheduler.resolveProgress(context.Background(), channel); err != nil {
-		t.Fatalf("第二次 resolveProgress 返回错误: %v", err)
-	}
+	scheduler.resolveProgress(channel)
 	if scheduler.State() != StateInventoryFetch {
 		t.Fatalf("保存恢复后应刷新 inventory: %s", scheduler.State())
 	}

@@ -23,6 +23,11 @@ type Operation struct {
 	Variables     map[string]any      `json:"variables,omitempty"`
 }
 
+type RawQuery struct {
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables,omitempty"`
+}
+
 type OperationExtensions struct {
 	PersistedQuery PersistedQuery `json:"persistedQuery"`
 }

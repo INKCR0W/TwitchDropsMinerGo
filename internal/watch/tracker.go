@@ -30,11 +30,8 @@ var (
 
 type GQLClient interface {
 	Do(context.Context, gql.Operation) (gql.Response, error)
+	DoRaw(context.Context, gql.RawQuery) (gql.Response, error)
 	DoBatch(context.Context, []gql.Operation) ([]gql.Response, error)
-}
-
-type HTTPClient interface {
-	Do(context.Context, httpclient.Request) (httpclient.Response, error)
 }
 
 type AuthState interface {
@@ -45,7 +42,6 @@ type AuthState interface {
 
 type Options struct {
 	GQLClient   GQLClient
-	HTTPClient  HTTPClient
 	AuthState   AuthState
 	ClientInfo  httpclient.ClientInfo
 	OnlineDelay time.Duration
@@ -56,7 +52,6 @@ type Options struct {
 
 type Tracker struct {
 	gqlClient   GQLClient
-	httpClient  HTTPClient
 	authState   AuthState
 	clientInfo  httpclient.ClientInfo
 	onlineDelay time.Duration
@@ -78,7 +73,6 @@ type Tracker struct {
 
 type trackedChannel struct {
 	channel       *domain.Channel
-	spadeURL      string
 	epoch         uint64
 	pendingSeq    uint64
 	pendingCancel context.CancelFunc
@@ -105,9 +99,6 @@ type streamStateMessage struct {
 func NewTracker(options Options) (*Tracker, error) {
 	if options.GQLClient == nil {
 		return nil, fmt.Errorf("watch GQL 客户端不能为空")
-	}
-	if options.HTTPClient == nil {
-		return nil, fmt.Errorf("watch HTTP 客户端不能为空")
 	}
 	if options.AuthState == nil {
 		return nil, fmt.Errorf("watch 认证状态不能为空")
@@ -141,7 +132,6 @@ func NewTracker(options Options) (*Tracker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Tracker{
 		gqlClient:   options.GQLClient,
-		httpClient:  options.HTTPClient,
 		authState:   options.AuthState,
 		clientInfo:  clientInfo,
 		onlineDelay: onlineDelay,

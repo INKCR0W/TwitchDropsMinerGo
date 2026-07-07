@@ -140,6 +140,15 @@ func (c *Client) Do(ctx context.Context, operation Operation) (Response, error) 
 	return responses[0], nil
 }
 
+func (c *Client) DoRaw(ctx context.Context, query RawQuery) (Response, error) {
+	responses, err := c.do(ctx, query, true)
+	if err != nil {
+		return Response{}, err
+	}
+
+	return responses[0], nil
+}
+
 func (c *Client) DoBatch(ctx context.Context, operations []Operation) ([]Response, error) {
 	if len(operations) == 0 {
 		return []Response{}, nil
