@@ -205,7 +205,9 @@ func smartCandidateTopTier(candidate smartGameCandidate, anyPriorityAtRisk bool)
 	if smartCandidateIsPriority(candidate) {
 		return true
 	}
-	return smartCandidateAtRisk(candidate) && !anyPriorityAtRisk
+	// Only promote a non-priority game that is watchable right now; an upcoming
+	// game cannot be earned yet, so lifting it above active games is pointless.
+	return candidate.active && smartCandidateAtRisk(candidate) && !anyPriorityAtRisk
 }
 
 func smartAvailabilityRisk(value float64) int {
@@ -269,7 +271,9 @@ func campaignCertainlyUnfinishable(campaign *domain.DropsCampaign, now time.Time
 		}
 		sawTargetDrop = true
 
-		remainingMinutes := drop.TotalRemainingMinutes()
+		// Weigh only the drop's own minutes against its own window; precondition
+		// minutes belong to their (earlier) windows, not this drop's budget.
+		remainingMinutes := drop.RemainingMinutes()
 		if remainingMinutes <= 0 {
 			return false
 		}

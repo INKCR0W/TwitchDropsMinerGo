@@ -263,6 +263,84 @@ func TestComputeWantedGamesSmartBalanceProtectsPriorityWhenPriorityAlsoAtRisk(t 
 	}
 }
 
+func TestComputeWantedGamesSmartBalanceKeepsCampaignWithLateFinalDropBehindPrecondition(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gameChained := domain.Game{ID: 91, Name: "Chained"}
+
+	spec := domain.CampaignSpec{
+		ID:       "campaign-chained",
+		Name:     "campaign-chained",
+		Game:     gameChained,
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(10 * time.Hour),
+		Drops: []domain.TimedDropSpec{
+			{
+				// Benefit-less precondition, earnable across the whole campaign window.
+				ID:              "drop-precondition",
+				Name:            "drop-precondition",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(10 * time.Hour),
+				RequiredMinutes: 60,
+			},
+			{
+				// Final reward drop with a late, narrow window; its own 30 minutes fit
+				// the window even though the precondition minutes do not.
+				ID:                  "drop-final",
+				Name:                "drop-final",
+				StartsAt:            now.Add(4 * time.Hour),
+				EndsAt:              now.Add(5 * time.Hour),
+				RequiredMinutes:     30,
+				PreconditionDropIDs: []string{"drop-precondition"},
+				Benefits: []domain.Benefit{
+					{ID: "benefit-final", Name: "final-reward", Type: domain.BenefitTypeDirectEntitlement},
+				},
+			},
+		},
+	}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{PriorityMode: config.SmartBalance},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(mustCampaign(t, spec))
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gameChained}
+	if !slices.Equal(got, want) {
+		t.Fatalf("smart_balance 不应丢弃前置+迟到 final drop 但仍可完成的活动:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
+func TestComputeWantedGamesSmartBalanceDoesNotPromoteUpcomingAtRiskOverActive(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gameActiveRelaxed := domain.Game{ID: 93, Name: "Active Relaxed"}
+	gameUpcomingAtRisk := domain.Game{ID: 94, Name: "Upcoming AtRisk"}
+
+	// No priority list: tiering must not lift a not-yet-watchable upcoming game
+	// above a currently watchable active one.
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{PriorityMode: config.SmartBalance},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(
+		mustCampaign(t, campaignSpec(now, "campaign-active-relaxed", gameActiveRelaxed, now.Add(-time.Hour), now.Add(4*time.Hour), nil)),
+		// upcoming (starts in 10m) and at risk (availability = 36/20 = 1.8), but finishable
+		mustCampaign(t, campaignSpecWithDrop("campaign-upcoming-atrisk", gameUpcomingAtRisk, now.Add(10*time.Minute), now.Add(36*time.Minute), nil, domain.TimedDropSpec{
+			RequiredMinutes: 20,
+		})),
+	)
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gameActiveRelaxed, gameUpcomingAtRisk}
+	if !slices.Equal(got, want) {
+		t.Fatalf("smart_balance 不应把尚不可刷的 upcoming at-risk 活动排到当前可刷活动之前:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
 func TestComputeWantedGamesPriorityOnlyStillHonorsPriorityList(t *testing.T) {
 	t.Parallel()
 
