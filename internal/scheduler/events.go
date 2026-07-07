@@ -193,14 +193,17 @@ func (s *Scheduler) processDropProgress(message dropEventMessage) {
 	}
 
 	watchingChannel := s.currentWatchingChannel()
-	if s.applyDropProgress(s.nowUTC(), watchingChannel, message.Data.DropID, message.Data.CurrentProgressMin) {
-		s.logger.Info(
-			"收到掉宝进度更新",
-			"drop_id", message.Data.DropID,
-			"current_minutes", message.Data.CurrentProgressMin,
-			"required_minutes", message.Data.RequiredProgressMin,
-		)
+	if !s.applyDropProgress(s.nowUTC(), watchingChannel, message.Data.DropID, message.Data.CurrentProgressMin) {
+		return
 	}
+
+	attrs := []any{
+		"drop_id", message.Data.DropID,
+		"current_minutes", message.Data.CurrentProgressMin,
+		"required_minutes", message.Data.RequiredProgressMin,
+	}
+	attrs = append(attrs, s.watchProgressAttrs(message.Data.DropID)...)
+	s.logger.Info("收到掉宝进度更新", attrs...)
 }
 
 func (s *Scheduler) processDropClaim(ctx context.Context, message dropEventMessage) error {
@@ -302,9 +305,8 @@ func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dr
 		return false
 	}
 
-	before := drop.CurrentMinutes()
 	drop.UpdateMinutes(currentMinutes)
-	s.logWatchProgressLocked(drop.Campaign, drop, drop.CurrentMinutes() > before)
+	s.logDropOverviewLocked(drop.Campaign, drop)
 	s.lastProgressAt = now.UTC()
 	return true
 }
@@ -327,7 +329,7 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 	if activeCampaign.IsRewardCampaign {
 		completed := activeCampaign.BumpRewardMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
 		s.lastProgressAt = now.UTC()
-		s.logWatchProgressLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false), true)
+		s.logDropOverviewLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 		if completed {
 			completed = s.recordRewardCompletedLocked(activeCampaign, now)
 		}
@@ -336,7 +338,7 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 
 	reachedLimit := activeCampaign.BumpMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
 	s.lastProgressAt = now.UTC()
-	s.logWatchProgressLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false), true)
+	s.logDropOverviewLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 	return false, reachedLimit, true
 }
 

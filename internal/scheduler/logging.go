@@ -8,41 +8,48 @@ import (
 	"twitchdropsminergo/internal/domain"
 )
 
-func (s *Scheduler) logWatchProgressLocked(campaign *domain.DropsCampaign, drop *domain.TimedDrop, advanced bool) {
+func (s *Scheduler) logDropOverviewLocked(campaign *domain.DropsCampaign, drop *domain.TimedDrop) {
 	if s == nil || campaign == nil || drop == nil {
 		return
 	}
-
-	changed := drop.ID != s.lastLoggedProgressDropID
-	if !changed && !advanced {
+	if drop.ID == s.lastLoggedProgressDropID {
 		return
 	}
 
-	if changed {
-		s.lastLoggedProgressDropID = drop.ID
-		s.logger.Info(
-			"开始挂新掉落",
-			"game", gameName(campaign.Game),
-			"campaign", campaign.Name,
-			"drop", drop.Name,
-			"drop_required_minutes", drop.RequiredMinutes,
-			"campaign_required_minutes", campaign.RequiredMinutes(),
-			"campaign_remaining_minutes", campaign.RemainingMinutes(),
-			"drops_claimed", campaign.ClaimedDrops(),
-			"drops_total", campaign.TotalDrops(),
-			"drops_detail", dropsDetail(campaign),
-		)
+	s.lastLoggedProgressDropID = drop.ID
+	s.logger.Info(
+		"开始挂新掉落",
+		"game", gameName(campaign.Game),
+		"campaign", campaign.Name,
+		"drop", drop.Name,
+		"drop_required_minutes", drop.RequiredMinutes,
+		"campaign_required_minutes", campaign.RequiredMinutes(),
+		"campaign_remaining_minutes", campaign.RemainingMinutes(),
+		"drops_claimed", campaign.ClaimedDrops(),
+		"drops_total", campaign.TotalDrops(),
+		"drops_detail", dropsDetail(campaign),
+	)
+}
+
+func (s *Scheduler) watchProgressAttrs(dropID string) []any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	drop := s.snapshot.Drops[dropID]
+	if drop == nil {
+		return nil
 	}
 
-	s.logger.Info(
-		"挂机进度",
-		"game", gameName(campaign.Game),
-		"drop", drop.Name,
-		"drop_watched_minutes", drop.CurrentMinutes(),
-		"drop_required_minutes", drop.RequiredMinutes,
-		"drop_remaining_minutes", max(drop.RemainingMinutes(), 0),
-		"campaign_remaining_minutes", campaign.RemainingMinutes(),
-	)
+	attrs := []any{"drop", drop.Name}
+	if campaign := drop.Campaign; campaign != nil {
+		attrs = append(attrs,
+			"game", gameName(campaign.Game),
+			"drop_remaining_minutes", max(drop.RemainingMinutes(), 0),
+			"campaign_remaining_minutes", campaign.RemainingMinutes(),
+			"campaign_required_minutes", campaign.RequiredMinutes(),
+		)
+	}
+	return attrs
 }
 
 func dropsDetail(campaign *domain.DropsCampaign) string {
