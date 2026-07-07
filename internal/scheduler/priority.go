@@ -102,6 +102,7 @@ type smartGameCandidate struct {
 	remainingMinutes int
 	progress         float64
 	priorityIndex    int
+	topTier          bool
 }
 
 func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, nextHour time.Time, settings config.Settings) []domain.Game {
@@ -126,8 +127,19 @@ func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, n
 	for _, candidate := range bestByGame {
 		candidates = append(candidates, candidate)
 	}
+
+	anyPriorityAtRisk := false
+	for _, candidate := range candidates {
+		if smartCandidateIsPriority(candidate) && smartCandidateAtRisk(candidate) {
+			anyPriorityAtRisk = true
+			break
+		}
+	}
+	for i := range candidates {
+		candidates[i].topTier = smartCandidateTopTier(candidates[i], anyPriorityAtRisk)
+	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		return smartGameCandidateLess(candidates[i], candidates[j])
+		return smartTieredLess(candidates[i], candidates[j])
 	})
 
 	wanted := make([]domain.Game, 0, len(candidates))
@@ -174,6 +186,28 @@ func smartGameCandidateLess(left smartGameCandidate, right smartGameCandidate) b
 	}
 }
 
+func smartTieredLess(left smartGameCandidate, right smartGameCandidate) bool {
+	if left.topTier != right.topTier {
+		return left.topTier && !right.topTier
+	}
+	return smartGameCandidateLess(left, right)
+}
+
+func smartCandidateIsPriority(candidate smartGameCandidate) bool {
+	return candidate.priorityIndex != math.MaxInt
+}
+
+func smartCandidateAtRisk(candidate smartGameCandidate) bool {
+	return candidate.availabilityRisk == 0
+}
+
+func smartCandidateTopTier(candidate smartGameCandidate, anyPriorityAtRisk bool) bool {
+	if smartCandidateIsPriority(candidate) {
+		return true
+	}
+	return smartCandidateAtRisk(candidate) && !anyPriorityAtRisk
+}
+
 func smartAvailabilityRisk(value float64) int {
 	switch {
 	case value <= 2:
@@ -194,7 +228,33 @@ func smartNextDropMinutes(campaign *domain.DropsCampaign, now time.Time, enableB
 		return max(drop.RemainingMinutes(), 0)
 	}
 
+	if remaining, ok := cheapestTargetRemainingMinutes(campaign); ok {
+		return max(remaining, 0)
+	}
+
 	return max(campaign.RemainingMinutes(), 0)
+}
+
+func isSmartTargetDrop(drop *domain.TimedDrop) bool {
+	return drop != nil &&
+		!drop.IsClaimed &&
+		drop.RequiredMinutes > 0 &&
+		len(drop.Benefits) > 0
+}
+
+func cheapestTargetRemainingMinutes(campaign *domain.DropsCampaign) (int, bool) {
+	cheapest := math.MaxInt
+	found := false
+	for _, drop := range campaign.Drops() {
+		if !isSmartTargetDrop(drop) {
+			continue
+		}
+		if remaining := drop.TotalRemainingMinutes(); remaining < cheapest {
+			cheapest = remaining
+			found = true
+		}
+	}
+	return cheapest, found
 }
 
 func campaignCertainlyUnfinishable(campaign *domain.DropsCampaign, now time.Time) bool {
@@ -202,20 +262,39 @@ func campaignCertainlyUnfinishable(campaign *domain.DropsCampaign, now time.Time
 		return true
 	}
 
-	remainingMinutes := campaign.RemainingMinutes()
-	if remainingMinutes <= 0 {
-		return false
+	sawTargetDrop := false
+	for _, drop := range campaign.Drops() {
+		if !isSmartTargetDrop(drop) {
+			continue
+		}
+		sawTargetDrop = true
+
+		remainingMinutes := drop.TotalRemainingMinutes()
+		if remainingMinutes <= 0 {
+			return false
+		}
+
+		earliestEarnAt := now
+		if drop.StartsAt.After(earliestEarnAt) {
+			earliestEarnAt = drop.StartsAt
+		}
+		if campaign.StartsAt.After(earliestEarnAt) {
+			earliestEarnAt = campaign.StartsAt
+		}
+
+		latestEarnAt := drop.EndsAt
+		if campaign.EndsAt.Before(latestEarnAt) {
+			latestEarnAt = campaign.EndsAt
+		}
+		if !latestEarnAt.After(earliestEarnAt) {
+			continue
+		}
+		if latestEarnAt.Sub(earliestEarnAt) >= time.Duration(remainingMinutes)*time.Minute {
+			return false
+		}
 	}
 
-	earliestEarnAt := now
-	if campaign.StartsAt.After(earliestEarnAt) {
-		earliestEarnAt = campaign.StartsAt
-	}
-	if !campaign.EndsAt.After(earliestEarnAt) {
-		return true
-	}
-
-	return campaign.EndsAt.Sub(earliestEarnAt) < time.Duration(remainingMinutes)*time.Minute
+	return sawTargetDrop
 }
 
 func (s *Scheduler) activeCampaignLocked(now time.Time, channel *domain.Channel) *domain.DropsCampaign {

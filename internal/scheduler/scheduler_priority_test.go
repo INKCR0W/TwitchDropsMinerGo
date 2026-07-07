@@ -103,10 +103,12 @@ func TestComputeWantedGamesSmartBalancePrefersActiveCampaignOverUpcoming(t *test
 	gameActive := domain.Game{ID: 31, Name: "Active"}
 	gameUpcoming := domain.Game{ID: 32, Name: "Upcoming"}
 
+	// Neither game is in the priority list, so both sit in the same tier and the
+	// within-tier ordering (active before upcoming) decides. Cross-tier priority
+	// precedence is covered by the priority-first tests above.
 	scheduler := newTestScheduler(t, testSchedulerOptions{
 		settings: config.Settings{
 			PriorityMode: config.SmartBalance,
-			Priority:     []string{gameUpcoming.Name},
 		},
 	})
 	scheduler.snapshot = snapshotFromCampaigns(
@@ -117,7 +119,7 @@ func TestComputeWantedGamesSmartBalancePrefersActiveCampaignOverUpcoming(t *test
 	got := scheduler.computeWantedGames(now)
 	want := []domain.Game{gameActive, gameUpcoming}
 	if !slices.Equal(got, want) {
-		t.Fatalf("smart_balance 应优先当前可刷的活动:\n got=%#v\nwant=%#v", got, want)
+		t.Fatalf("smart_balance 同层内应优先当前可刷的活动:\n got=%#v\nwant=%#v", got, want)
 	}
 }
 
@@ -150,6 +152,114 @@ func TestComputeWantedGamesSmartBalanceUsesBestCampaignPerGame(t *testing.T) {
 	want := []domain.Game{gameMulti, gameOther}
 	if !slices.Equal(got, want) {
 		t.Fatalf("smart_balance 应按同游戏最佳活动排序:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
+func TestComputeWantedGamesSmartBalanceKeepsGamesWithAFinishableDrop(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gameSalvageable := domain.Game{ID: 61, Name: "Salvageable"}
+
+	spec := domain.CampaignSpec{
+		ID:       "campaign-salvageable",
+		Name:     "campaign-salvageable",
+		Game:     gameSalvageable,
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(3 * time.Hour),
+		Drops: []domain.TimedDropSpec{
+			{
+				ID:              "drop-unfinishable",
+				Name:            "drop-unfinishable",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(40 * time.Minute),
+				RequiredMinutes: 300,
+				Benefits: []domain.Benefit{
+					{ID: "benefit-long", Name: "long-reward", Type: domain.BenefitTypeDirectEntitlement},
+				},
+			},
+			{
+				ID:              "drop-finishable",
+				Name:            "drop-finishable",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(3 * time.Hour),
+				RequiredMinutes: 20,
+				Benefits: []domain.Benefit{
+					{ID: "benefit-short", Name: "short-reward", Type: domain.BenefitTypeDirectEntitlement},
+				},
+			},
+		},
+	}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{PriorityMode: config.SmartBalance},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(mustCampaign(t, spec))
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gameSalvageable}
+	if !slices.Equal(got, want) {
+		t.Fatalf("smart_balance 应保留仍有可完成 drop 的游戏:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
+func TestComputeWantedGamesSmartBalancePrioritizesPriorityGamesWhenAllRelaxed(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gamePriority := domain.Game{ID: 71, Name: "Priority Relaxed"}
+	gameRareNonPriority := domain.Game{ID: 72, Name: "Rare NonPriority"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{
+			PriorityMode: config.SmartBalance,
+			Priority:     []string{gamePriority.Name},
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(
+		// priority: availability = 1200/30 ≈ 40 (risk 2, relaxed)
+		mustCampaign(t, campaignSpec(now, "campaign-priority-relaxed", gamePriority, now.Add(-time.Hour), now.Add(20*time.Hour), nil)),
+		// non-priority but rarer: availability = 300/30 = 10 (risk 2, still relaxed, lower availability than priority)
+		mustCampaign(t, campaignSpec(now, "campaign-rare-nonpriority", gameRareNonPriority, now.Add(-time.Hour), now.Add(5*time.Hour), nil)),
+	)
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gamePriority, gameRareNonPriority}
+	if !slices.Equal(got, want) {
+		t.Fatalf("smart_balance 应让 priority 游戏排在非 priority 之前:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
+func TestComputeWantedGamesSmartBalanceProtectsPriorityWhenPriorityAlsoAtRisk(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gamePriorityAtRisk := domain.Game{ID: 81, Name: "Priority AtRisk"}
+	gameNonPriorityMoreUrgent := domain.Game{ID: 82, Name: "NonPriority MoreUrgent"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{
+			PriorityMode: config.SmartBalance,
+			Priority:     []string{gamePriorityAtRisk.Name},
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(
+		// priority also at risk: availability = 90/60 = 1.5 (risk 0)
+		mustCampaign(t, campaignSpecWithDrop("campaign-priority-atrisk", gamePriorityAtRisk, now.Add(-time.Hour), now.Add(90*time.Minute), nil, domain.TimedDropSpec{
+			RequiredMinutes: 60,
+		})),
+		// non-priority even more urgent: availability = 72/60 = 1.2 (risk 0)
+		mustCampaign(t, campaignSpecWithDrop("campaign-nonpriority-urgent", gameNonPriorityMoreUrgent, now.Add(-time.Hour), now.Add(72*time.Minute), nil, domain.TimedDropSpec{
+			RequiredMinutes: 60,
+		})),
+	)
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gamePriorityAtRisk, gameNonPriorityMoreUrgent}
+	if !slices.Equal(got, want) {
+		t.Fatalf("某 priority 游戏也危险时不应让非 priority 插队:\n got=%#v\nwant=%#v", got, want)
 	}
 }
 
