@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"twitchdropsminergo/internal/secure"
 	"twitchdropsminergo/internal/storage"
 )
 
@@ -130,6 +131,8 @@ func Save(path string, settings Settings) error {
 	if err := storage.SaveJSONFile(path, settings); err != nil {
 		return fmt.Errorf("写入配置文件失败: %w", err)
 	}
+
+	_ = secure.HardenFile(path)
 
 	return nil
 }
