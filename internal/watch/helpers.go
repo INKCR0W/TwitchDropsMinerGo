@@ -119,14 +119,6 @@ func optionalMap(value any) map[string]any {
 	return mapValue
 }
 
-func mapFromMap(source map[string]any, key string) (map[string]any, error) {
-	value, ok := source[key]
-	if !ok {
-		return nil, fmt.Errorf("缺少字段 %q", key)
-	}
-	return asMap(value, key)
-}
-
 func asSlice(value any, label string) ([]any, error) {
 	sliceValue, ok := value.([]any)
 	if !ok {

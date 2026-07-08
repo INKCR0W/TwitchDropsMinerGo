@@ -10,7 +10,6 @@ import (
 	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
-	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/inventory"
 )
 
@@ -52,7 +51,6 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 	tracker, err := NewTracker(Options{
 		GQLClient:   gqlClient,
 		AuthState:   authState,
-		ClientInfo:  httpclient.AndroidAppClient,
 		OnlineDelay: options.onlineDelay,
 		Clock:       testNow,
 		Sleep:       options.sleep,

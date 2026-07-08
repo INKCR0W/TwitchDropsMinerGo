@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,7 +16,6 @@ import (
 	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
-	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/inventory"
 )
 
@@ -41,17 +42,17 @@ type AuthState interface {
 type Options struct {
 	GQLClient   GQLClient
 	AuthState   AuthState
-	ClientInfo  httpclient.ClientInfo
 	OnlineDelay time.Duration
 	BatchSize   int
 	Clock       func() time.Time
 	Sleep       func(context.Context, time.Duration) error
+	Logger      *slog.Logger
 }
 
 type Tracker struct {
 	gqlClient   GQLClient
 	authState   AuthState
-	clientInfo  httpclient.ClientInfo
+	logger      *slog.Logger
 	onlineDelay time.Duration
 	batchSize   int
 	now         func() time.Time
@@ -60,13 +61,13 @@ type Tracker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu        sync.Mutex
-	settings  config.Settings
-	inventory inventory.Snapshot
-	channels  map[int64]*trackedChannel
-	epochs    map[int64]uint64
-	onChange  func(before, after domain.Channel)
-	wg        sync.WaitGroup
+	mu           sync.Mutex
+	settings     config.Settings
+	inventory    inventory.Snapshot
+	channels     map[int64]*trackedChannel
+	epochCounter uint64
+	onChange     func(before, after domain.Channel)
+	wg           sync.WaitGroup
 }
 
 type trackedChannel struct {
@@ -102,9 +103,9 @@ func NewTracker(options Options) (*Tracker, error) {
 		return nil, fmt.Errorf("watch 认证状态不能为空")
 	}
 
-	clientInfo := options.ClientInfo
-	if clientInfo == (httpclient.ClientInfo{}) {
-		clientInfo = httpclient.AndroidAppClient
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
 	onlineDelay := options.OnlineDelay
@@ -131,7 +132,7 @@ func NewTracker(options Options) (*Tracker, error) {
 	return &Tracker{
 		gqlClient:   options.GQLClient,
 		authState:   options.AuthState,
-		clientInfo:  clientInfo,
+		logger:      logger,
 		onlineDelay: onlineDelay,
 		batchSize:   batchSize,
 		now:         now,
@@ -140,8 +141,12 @@ func NewTracker(options Options) (*Tracker, error) {
 		cancel:      cancel,
 		settings:    config.DefaultSettings(),
 		channels:    make(map[int64]*trackedChannel),
-		epochs:      make(map[int64]uint64),
 	}, nil
+}
+
+func (t *Tracker) bumpEpochLocked() uint64 {
+	t.epochCounter++
+	return t.epochCounter
 }
 
 func (t *Tracker) Close(ctx context.Context) error {
@@ -221,16 +226,14 @@ func (t *Tracker) AddChannel(channel domain.Channel) {
 		if !cloned.PendingStream {
 			cloned.PendingStream = existing.channel.PendingStream
 		}
-		existing.epoch++
-		t.epochs[channel.ID] = existing.epoch
+		existing.epoch = t.bumpEpochLocked()
 		existing.channel = &cloned
 		return
 	}
 
-	epoch := t.epochs[channel.ID]
 	t.channels[channel.ID] = &trackedChannel{
 		channel: &cloned,
-		epoch:   epoch,
+		epoch:   t.bumpEpochLocked(),
 	}
 }
 
@@ -249,8 +252,6 @@ func (t *Tracker) RemoveChannel(channelID int64) {
 	if tracked.pendingCancel != nil {
 		tracked.pendingCancel()
 	}
-	tracked.epoch++
-	t.epochs[channelID] = tracked.epoch
 	delete(t.channels, channelID)
 }
 
@@ -383,8 +384,7 @@ func (t *Tracker) setOffline(channelID int64) {
 		return
 	}
 	before = cloneChannel(tracked.channel)
-	tracked.epoch++
-	t.epochs[channelID] = tracked.epoch
+	tracked.epoch = t.bumpEpochLocked()
 	if tracked.pendingCancel != nil {
 		tracked.pendingCancel()
 		tracked.pendingCancel = nil

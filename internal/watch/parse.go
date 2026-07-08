@@ -29,10 +29,7 @@ func parseGetStreamInfoResponse(spec channelSpec, response gql.Response, availab
 	if err != nil {
 		return fetchedChannel{}, err
 	}
-	settingsData, err := mapFromMap(userValue, "broadcastSettings")
-	if err != nil {
-		return fetchedChannel{}, err
-	}
+	settingsData := optionalMap(userValue["broadcastSettings"])
 
 	stream := &domain.Stream{
 		BroadcastID:  int64Value(streamData, "id"),

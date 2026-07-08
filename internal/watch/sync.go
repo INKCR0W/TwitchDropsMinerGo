@@ -75,7 +75,8 @@ func (t *Tracker) SyncChannels(ctx context.Context, channelIDs ...int64) error {
 		for index, response := range responses {
 			result, err := parseGetStreamInfoResponse(chunk[index], response, settings.AvailableDropsCheck)
 			if err != nil {
-				return err
+				t.logger.Warn("跳过无法解析的 GetStreamInfo 响应", "channel_id", chunk[index].ID, "login", chunk[index].Login, "error", err)
+				continue
 			}
 			fetched[chunk[index].ID] = result
 			if result.Stream != nil && settings.AvailableDropsCheck {
@@ -261,7 +262,10 @@ func (t *Tracker) fetchChannel(ctx context.Context, spec channelSpec, settings c
 
 	campaignIDs, err := parseAvailableDropsResponse(response)
 	if err != nil {
-		return fetchedChannel{}, err
+		// 与网络错误分支一致：AvailableDrops 解析失败时保留已确认的在线 stream，
+		// 而不是丢弃它把在线频道误判为离线。
+		t.logger.Warn("解析 AvailableDrops 失败，保留在线状态", "channel_id", spec.ID, "error", err)
+		return fetched, nil
 	}
 
 	channel := &domain.Channel{
@@ -298,7 +302,9 @@ func (t *Tracker) fillDropsEnabledBatch(ctx context.Context, specs []channelSpec
 	for index, response := range responses {
 		campaignIDs, err := parseAvailableDropsResponse(response)
 		if err != nil {
-			return err
+			// 保留在线状态：解析失败时不覆盖 DropsEnabled，也不丢弃该频道。
+			t.logger.Warn("解析 AvailableDrops 失败，保留在线状态", "channel_id", specs[index].ID, "error", err)
+			continue
 		}
 
 		result := fetched[specs[index].ID]

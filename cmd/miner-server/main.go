@@ -149,6 +149,7 @@ func run(args []string) int {
 	gqlClient, err := gql.NewClient(gql.ClientOptions{
 		HTTPClient: httpClient,
 		ClientInfo: clientInfo,
+		Logger:     logger,
 		HeadersProvider: authState.HeadersProvider(auth.HeadersOptions{
 			UserAgent: clientInfo.UserAgent,
 			GQL:       true,
@@ -167,15 +168,16 @@ func run(args []string) int {
 		GQLClient:      gqlClient,
 		AuthState:      authState,
 		RewardProgress: rewardProgress.Snapshot(),
+		Logger:         logger,
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 inventory 刷新器失败", err)
 	}
 
 	tracker, err := watch.NewTracker(watch.Options{
-		GQLClient:  gqlClient,
-		AuthState:  authState,
-		ClientInfo: clientInfo,
+		GQLClient: gqlClient,
+		AuthState: authState,
+		Logger:    logger,
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 watch 跟踪器失败", err)
@@ -286,6 +288,11 @@ func runServiceWithTimeout(ctx context.Context, stop context.CancelFunc, shutdow
 	resultCh := make(chan runtimeResult, len(activeWorkers))
 	for _, worker := range activeWorkers {
 		go func(worker namedRunner) {
+			defer func() {
+				if r := recover(); r != nil {
+					resultCh <- runtimeResult{name: worker.name, err: fmt.Errorf("组件 %s 崩溃: %v", worker.name, r)}
+				}
+			}()
 			resultCh <- runtimeResult{name: worker.name, err: worker.runner.Run(ctx)}
 		}(worker)
 	}
