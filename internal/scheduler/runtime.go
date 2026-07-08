@@ -214,6 +214,25 @@ func (s *Scheduler) ChangeState(state State) {
 	s.signalStateChange()
 }
 
+func (s *Scheduler) advanceState(from State, to State) {
+	if s == nil {
+		return
+	}
+
+	s.mu.Lock()
+	previous := s.state
+	if s.state == from {
+		s.state = to
+	}
+	current := s.state
+	s.mu.Unlock()
+
+	if previous != current {
+		s.logger.Info("调度状态切换", "from", previous, "to", current)
+	}
+	s.signalStateChange()
+}
+
 func (s *Scheduler) SelectChannel(channelID int64) {
 	if s == nil {
 		return

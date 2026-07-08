@@ -83,6 +83,7 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 
 		sentAt := s.nowUTC()
 		succeeded, err := s.tracker.SendWatch(ctx, channelID)
+		watchReported := err == nil && succeeded
 		if err != nil {
 			s.logger.Warn("发送 watch 请求失败", "channel_id", channelID, "error", err)
 		} else if !succeeded {
@@ -96,7 +97,7 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 			return
 		}
 
-		if s.shouldResolveProgress(sentAt) {
+		if watchReported && s.shouldResolveProgress(sentAt) {
 			s.resolveProgress(channel)
 		}
 

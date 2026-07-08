@@ -80,7 +80,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			return nil
 		}
 		if err := s.waitForStateChange(ctx); err != nil {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				s.ChangeState(StateExit)
 				continue
 			}
@@ -91,7 +91,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 func (s *Scheduler) handleIdle() {
 	s.stopWatching()
-	s.clearStateChange()
 }
 
 func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
@@ -118,10 +117,10 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.snapshot = snapshot
+	trackerSnapshot, cloneErr := cloneInventorySnapshot(snapshot)
 	s.mu.Unlock()
-	trackerSnapshot, err := cloneInventorySnapshot(snapshot)
-	if err != nil {
-		return fmt.Errorf("复制 tracker inventory 快照失败: %w", err)
+	if cloneErr != nil {
+		return fmt.Errorf("复制 tracker inventory 快照失败: %w", cloneErr)
 	}
 	s.tracker.Configure(s.settingsCopy(), trackerSnapshot)
 	if err := s.ensureUserTopics(); err != nil {
@@ -130,7 +129,7 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	s.logger.Info("inventory 已装载，准备进入游戏筛选阶段")
 	s.clearRuntimeError()
 	s.restartMaintenance(ctx, snapshot.MaintenanceTriggers)
-	s.ChangeState(StateGamesUpdate)
+	s.advanceState(StateInventoryFetch, StateGamesUpdate)
 	return nil
 }
 
@@ -177,7 +176,7 @@ func (s *Scheduler) handleGamesUpdate(ctx context.Context) error {
 
 	s.restartWatching()
 	s.clearRuntimeError()
-	s.ChangeState(StateChannelsCleanup)
+	s.advanceState(StateGamesUpdate, StateChannelsCleanup)
 	return nil
 }
 
@@ -219,10 +218,10 @@ func (s *Scheduler) handleChannelsCleanup() {
 	s.mu.Unlock()
 
 	if len(wantedGames) == 0 {
-		s.ChangeState(StateIdle)
+		s.advanceState(StateChannelsCleanup, StateIdle)
 		return
 	}
-	s.ChangeState(StateChannelsFetch)
+	s.advanceState(StateChannelsCleanup, StateChannelsFetch)
 }
 
 func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
@@ -401,7 +400,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 	}
 
 	s.clearRuntimeError()
-	s.ChangeState(StateChannelSwitch)
+	s.advanceState(StateChannelsFetch, StateChannelSwitch)
 	return nil
 }
 
@@ -452,7 +451,6 @@ func (s *Scheduler) handleChannelSwitch() {
 
 	if selected != nil && s.canWatch(*selected) {
 		s.watch(selected.ID)
-		s.clearStateChange()
 		return
 	}
 
@@ -468,17 +466,15 @@ func (s *Scheduler) handleChannelSwitch() {
 
 	if newWatching != nil {
 		s.watch(newWatching.ID)
-		s.clearStateChange()
 		return
 	}
 
 	if watching := s.currentWatchingChannel(); watching != nil && s.canWatch(*watching) {
-		s.clearStateChange()
 		return
 	}
 
 	s.logNoWatchableChannel(channels)
-	s.ChangeState(StateIdle)
+	s.advanceState(StateChannelSwitch, StateIdle)
 }
 
 func (s *Scheduler) waitForStateChange(ctx context.Context) error {

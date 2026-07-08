@@ -80,6 +80,13 @@ func (s *Scheduler) onChannelChange(before, after domain.Channel) {
 		return
 	}
 
+	if state == StateIdle {
+		if after.Online() && s.canWatch(after) {
+			s.ChangeState(StateChannelSwitch)
+		}
+		return
+	}
+
 	if !before.Online() {
 		if after.Online() && s.canWatch(after) && s.shouldSwitch(after) {
 			s.watch(after.ID)
