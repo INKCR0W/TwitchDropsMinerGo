@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"twitchdropsminergo/internal/secure"
 	"twitchdropsminergo/internal/storage"
 )
 
@@ -41,6 +42,7 @@ type PersistentJar struct {
 	path   string
 	jar    *cookiejar.Jar
 	mu     sync.Mutex
+	saveMu sync.Mutex
 	stored map[string]map[cookieKey]persistedCookie
 }
 
@@ -68,15 +70,15 @@ func (j *PersistentJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		return
 	}
 
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
 	j.jar.SetCookies(u, cookies)
 	if u == nil {
 		return
 	}
 
 	key := canonicalCookieURL(u)
-
-	j.mu.Lock()
-	defer j.mu.Unlock()
 
 	perURL := j.stored[key]
 	if perURL == nil {
@@ -123,6 +125,8 @@ func (j *PersistentJar) Cookies(u *url.URL) []*http.Cookie {
 		return nil
 	}
 
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	return j.jar.Cookies(u)
 }
 
@@ -247,6 +251,9 @@ func (j *PersistentJar) Save() error {
 		return nil
 	}
 
+	j.saveMu.Lock()
+	defer j.saveMu.Unlock()
+
 	j.mu.Lock()
 	now := time.Now().UTC()
 	fileData := persistedJar{
@@ -282,7 +289,11 @@ func (j *PersistentJar) Save() error {
 	}
 	j.mu.Unlock()
 
-	return storage.SaveJSONFile(j.path, fileData)
+	if err := storage.SaveJSONFile(j.path, fileData); err != nil {
+		return err
+	}
+	_ = secure.HardenFile(j.path)
+	return nil
 }
 
 func canonicalCookieURL(u *url.URL) string {

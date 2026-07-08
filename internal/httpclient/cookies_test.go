@@ -4,9 +4,59 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestPersistentJarConcurrentAccessAndClear(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "cookies.json")
+	jar, err := NewPersistentJar(path)
+	if err != nil {
+		t.Fatalf("NewPersistentJar 返回错误: %v", err)
+	}
+
+	targetURL, err := url.Parse("https://www.twitch.tv/")
+	if err != nil {
+		t.Fatalf("解析 URL 失败: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				jar.SetCookies(targetURL, []*http.Cookie{{
+					Name: "auth-token", Value: "v", Path: "/", Domain: "www.twitch.tv",
+				}})
+				_ = jar.Cookies(targetURL)
+			}
+		}()
+	}
+
+	clearerDone := make(chan struct{})
+	go func() {
+		defer close(clearerDone)
+		for i := 0; i < 300; i++ {
+			_ = jar.ClearDomain("www.twitch.tv")
+			_ = jar.Clear()
+		}
+	}()
+
+	<-clearerDone
+	close(stop)
+	wg.Wait()
+}
 
 func TestPersistentJarRoundTrip(t *testing.T) {
 	t.Parallel()

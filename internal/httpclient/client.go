@@ -141,6 +141,9 @@ func New(options Options) (*Client, error) {
 		if parseErr != nil {
 			return nil, fmt.Errorf("解析代理地址失败: %w", parseErr)
 		}
+		if proxyURL.Scheme == "" || proxyURL.Host == "" {
+			return nil, fmt.Errorf("代理地址必须包含协议和主机: %q", proxy)
+		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 

@@ -61,7 +61,10 @@ func (b *ExponentialBackoff) Next() time.Duration {
 
 	seconds := math.Pow(b.config.Base, float64(b.steps))*multiplier + b.config.Shift.Seconds()
 	delay := time.Duration(seconds * float64(time.Second))
-	if delay > b.maximum {
+	if delay >= b.maximum {
+		if b.config.Variance > 0 {
+			return time.Duration(float64(b.maximum) * (1 - b.config.Variance*b.random()))
+		}
 		return b.maximum
 	}
 
