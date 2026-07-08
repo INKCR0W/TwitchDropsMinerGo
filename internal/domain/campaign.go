@@ -251,6 +251,9 @@ func (c *DropsCampaign) Finished() bool {
 	if c == nil {
 		return false
 	}
+	if len(c.Drops()) == 0 {
+		return false
+	}
 	for _, drop := range c.Drops() {
 		if !drop.IsClaimed && drop.RequiredMinutes > 0 {
 			return false
@@ -407,7 +410,9 @@ func (c *DropsCampaign) CanRecordRewardCompletion(now time.Time, channel *Channe
 	}
 
 	for _, drop := range c.Drops() {
-		if drop != nil && !drop.IsClaimed && drop.CurrentMinutes() >= drop.RequiredMinutes {
+		// 要求 RequiredMinutes > 0：缺少 minuteWatchedGoal 的奖励活动会解析出
+		// RequiredMinutes==0，若不加此判断会因 0>=0 被判定为“无需观看即可完成”。
+		if drop != nil && !drop.IsClaimed && drop.RequiredMinutes > 0 && drop.CurrentMinutes() >= drop.RequiredMinutes {
 			return true
 		}
 	}

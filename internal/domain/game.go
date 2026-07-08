@@ -9,7 +9,7 @@ const SpecialEventsGameID int64 = 509663
 
 var (
 	gameSlugApostrophePattern = regexp.MustCompile(`'`)
-	gameSlugNonWordPattern    = regexp.MustCompile(`\W+`)
+	gameSlugNonWordPattern    = regexp.MustCompile(`[^\p{L}\p{N}_]+`)
 	gameSlugDashPattern       = regexp.MustCompile(`-{2,}`)
 )
 
