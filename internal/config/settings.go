@@ -18,6 +18,12 @@ const (
 	SmartBalance         PriorityMode = "smart_balance"
 )
 
+// DefaultSmartPrioritySafetyMinutes 是 smart_balance 下允许非 priority 游戏插队前,
+// 每个 priority 游戏必须保留的最小富余时间(分钟)。只有当所有 priority 游戏的富余
+// 时间都不低于该值时,才允许更紧急的非 priority 游戏插队;从而保证 priority 游戏
+// 可以晚挖但不会因插队而来不及完成。
+const DefaultSmartPrioritySafetyMinutes = 120
+
 type LoggingSettings struct {
 	Level        string `json:"level"`
 	Format       string `json:"format"`
@@ -37,28 +43,31 @@ type FileStore struct {
 }
 
 type Settings struct {
-	Proxy               string          `json:"proxy"`
-	Language            string          `json:"language"`
-	DarkMode            bool            `json:"dark_mode"`
-	Exclude             []string        `json:"exclude"`
-	Priority            []string        `json:"priority"`
-	AutostartTray       bool            `json:"autostart_tray"`
-	ConnectionQuality   int             `json:"connection_quality"`
-	TrayNotifications   bool            `json:"tray_notifications"`
-	EnableBadgesEmotes  bool            `json:"enable_badges_emotes"`
-	AvailableDropsCheck bool            `json:"available_drops_check"`
-	PriorityMode        PriorityMode    `json:"priority_mode"`
-	Log                 LoggingSettings `json:"log"`
+	Proxy               string       `json:"proxy"`
+	Language            string       `json:"language"`
+	DarkMode            bool         `json:"dark_mode"`
+	Exclude             []string     `json:"exclude"`
+	Priority            []string     `json:"priority"`
+	AutostartTray       bool         `json:"autostart_tray"`
+	ConnectionQuality   int          `json:"connection_quality"`
+	TrayNotifications   bool         `json:"tray_notifications"`
+	EnableBadgesEmotes  bool         `json:"enable_badges_emotes"`
+	AvailableDropsCheck bool         `json:"available_drops_check"`
+	PriorityMode        PriorityMode `json:"priority_mode"`
+
+	SmartPrioritySafetyMinutes int             `json:"smart_priority_safety_minutes"`
+	Log                        LoggingSettings `json:"log"`
 }
 
 func DefaultSettings() Settings {
 	return Settings{
-		Language:          "English",
-		Exclude:           []string{},
-		Priority:          []string{},
-		ConnectionQuality: 1,
-		TrayNotifications: true,
-		PriorityMode:      PriorityOnly,
+		Language:                   "English",
+		Exclude:                    []string{},
+		Priority:                   []string{},
+		ConnectionQuality:          1,
+		TrayNotifications:          true,
+		PriorityMode:               PriorityOnly,
+		SmartPrioritySafetyMinutes: DefaultSmartPrioritySafetyMinutes,
 		Log: LoggingSettings{
 			Level:        "info",
 			Format:       "text",
@@ -99,6 +108,7 @@ func (s Settings) IsZero() bool {
 		!s.EnableBadgesEmotes &&
 		!s.AvailableDropsCheck &&
 		s.PriorityMode == "" &&
+		s.SmartPrioritySafetyMinutes == 0 &&
 		s.Log == (LoggingSettings{})
 }
 
@@ -174,6 +184,13 @@ func (s *Settings) Validate() error {
 	case PriorityOnly, EndingSoonest, LowAvailabilityFirst, SmartBalance:
 	default:
 		return fmt.Errorf("priority_mode %q 不受支持", s.PriorityMode)
+	}
+
+	if s.SmartPrioritySafetyMinutes < 0 {
+		return fmt.Errorf("smart_priority_safety_minutes 不能小于 0")
+	}
+	if s.SmartPrioritySafetyMinutes == 0 {
+		s.SmartPrioritySafetyMinutes = defaults.SmartPrioritySafetyMinutes
 	}
 
 	s.Log.Level = strings.ToLower(strings.TrimSpace(s.Log.Level))

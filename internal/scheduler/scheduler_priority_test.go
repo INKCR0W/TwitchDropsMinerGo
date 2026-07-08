@@ -263,6 +263,93 @@ func TestComputeWantedGamesSmartBalanceProtectsPriorityWhenPriorityAlsoAtRisk(t 
 	}
 }
 
+func TestComputeWantedGamesSmartBalanceBlocksInsertionWhenPrioritySpareBelowSafety(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gamePriority := domain.Game{ID: 101, Name: "Priority Tight Spare"}
+	gameUrgent := domain.Game{ID: 102, Name: "Urgent NonPriority"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{
+			PriorityMode: config.SmartBalance,
+			Priority:     []string{gamePriority.Name},
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(
+		mustCampaign(t, campaignSpec(now, "campaign-priority-tight", gamePriority, now.Add(-time.Hour), now.Add(100*time.Minute), nil)),
+		mustCampaign(t, campaignSpecWithDrop("campaign-urgent", gameUrgent, now.Add(-time.Hour), now.Add(72*time.Minute), nil, domain.TimedDropSpec{
+			RequiredMinutes: 60,
+		})),
+	)
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gamePriority, gameUrgent}
+	if !slices.Equal(got, want) {
+		t.Fatalf("priority 富余时间不足 120 分钟时不应被非 priority 插队:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
+func TestComputeWantedGamesSmartBalanceRespectsConfiguredSafetyMargin(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gamePriority := domain.Game{ID: 111, Name: "Priority Tight Spare"}
+	gameUrgent := domain.Game{ID: 112, Name: "Urgent NonPriority"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{
+			PriorityMode:               config.SmartBalance,
+			Priority:                   []string{gamePriority.Name},
+			SmartPrioritySafetyMinutes: 15,
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(
+		mustCampaign(t, campaignSpec(now, "campaign-priority-tight", gamePriority, now.Add(-time.Hour), now.Add(100*time.Minute), nil)),
+		mustCampaign(t, campaignSpecWithDrop("campaign-urgent", gameUrgent, now.Add(-time.Hour), now.Add(72*time.Minute), nil, domain.TimedDropSpec{
+			RequiredMinutes: 60,
+		})),
+	)
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gameUrgent, gamePriority}
+	if !slices.Equal(got, want) {
+		t.Fatalf("安全余量调小后应允许更紧急的非 priority 插队:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
+func TestComputeWantedGamesSmartBalanceProtectsPriorityByTightestSiblingCampaign(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	gamePriority := domain.Game{ID: 121, Name: "Priority MultiCampaign"}
+	gameUrgent := domain.Game{ID: 122, Name: "Urgent NonPriority"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{
+			PriorityMode: config.SmartBalance,
+			Priority:     []string{gamePriority.Name},
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(
+		mustCampaign(t, campaignSpecWithDrop("campaign-priority-tight", gamePriority, now.Add(-time.Hour), now.Add(25*time.Minute), nil, domain.TimedDropSpec{
+			RequiredMinutes: 10,
+		})),
+		mustCampaign(t, campaignSpecWithDrop("campaign-priority-relaxed", gamePriority, now.Add(-time.Hour), now.Add(10*time.Hour), nil, domain.TimedDropSpec{
+			RequiredMinutes: 300,
+		})),
+		mustCampaign(t, campaignSpecWithDrop("campaign-urgent", gameUrgent, now.Add(-time.Hour), now.Add(72*time.Minute), nil, domain.TimedDropSpec{
+			RequiredMinutes: 60,
+		})),
+	)
+
+	got := scheduler.computeWantedGames(now)
+	want := []domain.Game{gamePriority, gameUrgent}
+	if !slices.Equal(got, want) {
+		t.Fatalf("同一 priority 游戏存在更紧的活动时应触发保护,不应被非 priority 插队:\n got=%#v\nwant=%#v", got, want)
+	}
+}
+
 func TestComputeWantedGamesSmartBalanceKeepsCampaignWithLateFinalDropBehindPrecondition(t *testing.T) {
 	t.Parallel()
 

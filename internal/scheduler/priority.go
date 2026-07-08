@@ -101,12 +101,22 @@ type smartGameCandidate struct {
 	nextDropMinutes  int
 	remainingMinutes int
 	progress         float64
+	spareMinutes     float64
 	priorityIndex    int
 	topTier          bool
 }
 
 func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, nextHour time.Time, settings config.Settings) []domain.Game {
+	// 只有当所有 priority 游戏都留有足够富余时间时,才允许非 priority 游戏插队。
+	// 富余按绝对分钟数(而非比值)衡量,阈值可通过 smart_priority_safety_minutes 配置,
+	// 保证 priority 游戏可以晚挖但不会因插队而来不及完成。
+	safetyMinutes := float64(settings.SmartPrioritySafetyMinutes)
+	if safetyMinutes <= 0 {
+		safetyMinutes = float64(config.DefaultSmartPrioritySafetyMinutes)
+	}
+
 	bestByGame := make(map[string]smartGameCandidate)
+	anyPriorityBelowSafety := false
 	for _, campaign := range campaigns {
 		if campaign == nil ||
 			stringInList(campaign.Game.Name, settings.Exclude) ||
@@ -116,6 +126,11 @@ func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, n
 		}
 
 		candidate := buildSmartGameCandidate(campaign, now, settings)
+		// 用每个 priority 活动(去重前)自身的富余判断保护,避免同一游戏的宽裕活动
+		// 在去重后掩盖了另一个更紧的活动,导致后者被插队挤掉。
+		if smartCandidateIsPriority(candidate) && candidate.spareMinutes < safetyMinutes {
+			anyPriorityBelowSafety = true
+		}
 		key := gameKey(candidate.game)
 		current, exists := bestByGame[key]
 		if !exists || smartGameCandidateLess(candidate, current) {
@@ -128,15 +143,8 @@ func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, n
 		candidates = append(candidates, candidate)
 	}
 
-	anyPriorityAtRisk := false
-	for _, candidate := range candidates {
-		if smartCandidateIsPriority(candidate) && smartCandidateAtRisk(candidate) {
-			anyPriorityAtRisk = true
-			break
-		}
-	}
 	for i := range candidates {
-		candidates[i].topTier = smartCandidateTopTier(candidates[i], anyPriorityAtRisk)
+		candidates[i].topTier = smartCandidateTopTier(candidates[i], anyPriorityBelowSafety)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return smartTieredLess(candidates[i], candidates[j])
@@ -159,6 +167,7 @@ func buildSmartGameCandidate(campaign *domain.DropsCampaign, now time.Time, sett
 		nextDropMinutes:  smartNextDropMinutes(campaign, now, settings.EnableBadgesEmotes),
 		remainingMinutes: max(campaign.RemainingMinutes(), 0),
 		progress:         campaign.Progress(),
+		spareMinutes:     campaign.MinSpareMinutes(now),
 		priorityIndex:    priorityNameIndex(campaign.Game.Name, settings.Priority),
 	}
 }
@@ -201,13 +210,14 @@ func smartCandidateAtRisk(candidate smartGameCandidate) bool {
 	return candidate.availabilityRisk == 0
 }
 
-func smartCandidateTopTier(candidate smartGameCandidate, anyPriorityAtRisk bool) bool {
+func smartCandidateTopTier(candidate smartGameCandidate, anyPriorityBelowSafety bool) bool {
 	if smartCandidateIsPriority(candidate) {
 		return true
 	}
-	// Only promote a non-priority game that is watchable right now; an upcoming
-	// game cannot be earned yet, so lifting it above active games is pointless.
-	return candidate.active && smartCandidateAtRisk(candidate) && !anyPriorityAtRisk
+	// 仅在以下条件全部满足时,才把非 priority 游戏提升到与 priority 同层参与插队:
+	// 它当前可刷(upcoming 还挖不了,提升无意义)、它本身确实紧急,且没有任何
+	// priority 游戏的富余时间已低于安全阈值。
+	return candidate.active && smartCandidateAtRisk(candidate) && !anyPriorityBelowSafety
 }
 
 func smartAvailabilityRisk(value float64) int {

@@ -7,6 +7,38 @@ import (
 	"twitchdropsminergo/internal/storage"
 )
 
+func TestSmartPrioritySafetyMinutesDefaultAndValidation(t *testing.T) {
+	t.Parallel()
+
+	if got := DefaultSettings().SmartPrioritySafetyMinutes; got != DefaultSmartPrioritySafetyMinutes {
+		t.Fatalf("默认 smart_priority_safety_minutes 应为 %d, 实际 %d", DefaultSmartPrioritySafetyMinutes, got)
+	}
+
+	zero := DefaultSettings()
+	zero.SmartPrioritySafetyMinutes = 0
+	if err := zero.Validate(); err != nil {
+		t.Fatalf("Validate 返回错误: %v", err)
+	}
+	if zero.SmartPrioritySafetyMinutes != DefaultSmartPrioritySafetyMinutes {
+		t.Fatalf("0 应回退为默认 %d, 实际 %d", DefaultSmartPrioritySafetyMinutes, zero.SmartPrioritySafetyMinutes)
+	}
+
+	negative := DefaultSettings()
+	negative.SmartPrioritySafetyMinutes = -1
+	if err := negative.Validate(); err == nil {
+		t.Fatal("smart_priority_safety_minutes 为负值应返回错误")
+	}
+
+	custom := DefaultSettings()
+	custom.SmartPrioritySafetyMinutes = 45
+	if err := custom.Validate(); err != nil {
+		t.Fatalf("Validate 返回错误: %v", err)
+	}
+	if custom.SmartPrioritySafetyMinutes != 45 {
+		t.Fatalf("自定义值应保留为 45, 实际 %d", custom.SmartPrioritySafetyMinutes)
+	}
+}
+
 func TestLoadAppliesFileOverridesAndDefaults(t *testing.T) {
 	t.Parallel()
 

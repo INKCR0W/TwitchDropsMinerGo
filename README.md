@@ -34,6 +34,7 @@ miner-server --runtime-dir /path/to/runtime
   "priority": ["游戏 A", "游戏 B"],
   "exclude": [],
   "priority_mode": "priority_only",
+  "smart_priority_safety_minutes": 120,
   "enable_badges_emotes": false,
   "available_drops_check": false,
   "proxy": ""
@@ -41,6 +42,8 @@ miner-server --runtime-dir /path/to/runtime
 ```
 
 `priority_mode` 可选值：`priority_only`、`ending_soonest`、`low_availability_first`、`smart_balance`。
+
+`smart_priority_safety_minutes`（默认 120）仅在 `smart_balance` 模式下生效：只有当 `priority` 列表中每个可挖游戏的富余时间（距结束时间减去还需观看的分钟数，按活动内最紧的 drop 计）都不低于该值时，才允许更紧急的非 priority 游戏插队。这样 priority 游戏可以晚挖，但不会因插队而来不及完成；调小该值会更容易让位给紧急的非 priority 活动。
 
 ## 致谢
 

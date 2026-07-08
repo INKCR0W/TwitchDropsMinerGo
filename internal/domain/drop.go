@@ -216,6 +216,18 @@ func (d *TimedDrop) Availability(now time.Time) float64 {
 	return d.EndsAt.Sub(now).Minutes() / float64(d.TotalRemainingMinutes())
 }
 
+// SpareMinutes 返回该 drop 的绝对富余时间(分钟): 距结束的时间减去还需观看的分钟数。
+// 值越小越紧迫; 已领取/已结束/无需观看的 drop 返回 +Inf(不构成约束)。
+func (d *TimedDrop) SpareMinutes(now time.Time) float64 {
+	if d == nil {
+		return math.Inf(1)
+	}
+	if d.RequiredMinutes <= 0 || d.TotalRemainingMinutes() <= 0 || !now.Before(d.EndsAt) {
+		return math.Inf(1)
+	}
+	return d.EndsAt.Sub(now).Minutes() - float64(d.TotalRemainingMinutes())
+}
+
 func (d *TimedDrop) CanEarn(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
 	return d != nil &&
 		d.baseCanEarn(now) &&

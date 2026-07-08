@@ -345,6 +345,22 @@ func (c *DropsCampaign) Availability(now time.Time) float64 {
 	return minimum
 }
 
+// MinSpareMinutes 返回活动内最紧的 drop 的绝对富余时间(分钟)。用于 smart_balance
+// 判断某 priority 活动是否还留有足够富余,可暂时让位给更紧急的非 priority 活动。
+func (c *DropsCampaign) MinSpareMinutes(now time.Time) float64 {
+	if c == nil || c.TotalDrops() == 0 {
+		return math.Inf(1)
+	}
+
+	minimum := math.Inf(1)
+	for _, drop := range c.Drops() {
+		if spare := drop.SpareMinutes(now); spare < minimum {
+			minimum = spare
+		}
+	}
+	return minimum
+}
+
 func (c *DropsCampaign) FirstEarnableDrop(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) *TimedDrop {
 	if c == nil {
 		return nil
