@@ -18,8 +18,7 @@ func openPrivateAppendFile(path string) (*os.File, error) {
 	}
 
 	if err := protectPrivateFile(path); err != nil {
-		_ = file.Close()
-		return nil, err
+		fmt.Fprintf(os.Stderr, "警告: 日志文件权限加固失败，继续运行: %v\n", err)
 	}
 
 	return file, nil
