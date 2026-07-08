@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 
@@ -10,12 +11,13 @@ import (
 
 var boxArtDimensionsPattern = regexp.MustCompile(`-\d+x\d+(\.(?:jpg|png|gif))$`)
 
-func buildCampaigns(payload map[string]any, claimedBenefits map[string]time.Time) ([]*domain.DropsCampaign, error) {
+func buildCampaigns(payload map[string]any, claimedBenefits map[string]time.Time, logger *slog.Logger) ([]*domain.DropsCampaign, error) {
 	campaigns := make([]*domain.DropsCampaign, 0, len(payload))
 	for campaignID, rawCampaign := range payload {
 		campaignData, err := asMap(rawCampaign, "campaign."+campaignID)
 		if err != nil {
-			return nil, err
+			logger.Warn("跳过无法解析的 campaign", "campaign_id", campaignID, "error", err)
+			continue
 		}
 		if isNilValue(campaignData["game"]) {
 			continue
@@ -23,7 +25,8 @@ func buildCampaigns(payload map[string]any, claimedBenefits map[string]time.Time
 
 		campaign, err := buildCampaign(campaignData, claimedBenefits)
 		if err != nil {
-			return nil, fmt.Errorf("构造 campaign %q 失败: %w", campaignID, err)
+			logger.Warn("跳过无法解析的 campaign", "campaign_id", campaignID, "error", err)
+			continue
 		}
 		campaigns = append(campaigns, campaign)
 	}
@@ -174,6 +177,7 @@ func parseDrop(data map[string]any, claimedBenefits map[string]time.Time) (domai
 		isClaimed = inferClaimedByBenefits(benefits, claimedBenefits, startsAt, endsAt)
 	}
 
+	requiredMinutes, hasRequiredMinutes := int64ValuePresent(data, "requiredMinutesWatched")
 	spec := domain.TimedDropSpec{
 		ID:                  stringValue(data, "id"),
 		Name:                stringValue(data, "name"),
@@ -184,13 +188,16 @@ func parseDrop(data map[string]any, claimedBenefits map[string]time.Time) (domai
 		IsClaimed:           isClaimed,
 		PreconditionDropIDs: parsePreconditionDropIDs(data["preconditionDrops"]),
 		RealCurrentMinutes:  intValue(selfData, "currentMinutesWatched"),
-		RequiredMinutes:     intValue(data, "requiredMinutesWatched"),
+		RequiredMinutes:     int(requiredMinutes),
 	}
 	if spec.ID == "" {
 		return domain.TimedDropSpec{}, fmt.Errorf("drop id 不能为空")
 	}
 	if spec.StartsAt.IsZero() || spec.EndsAt.IsZero() {
 		return domain.TimedDropSpec{}, fmt.Errorf("drop %q 缺少开始或结束时间", spec.ID)
+	}
+	if !hasRequiredMinutes {
+		return domain.TimedDropSpec{}, fmt.Errorf("drop %q 缺少 requiredMinutesWatched 字段", spec.ID)
 	}
 
 	return spec, nil
@@ -229,19 +236,17 @@ func parseBenefits(value any) ([]domain.Benefit, error) {
 }
 
 func inferClaimedByBenefits(benefits []domain.Benefit, claimedBenefits map[string]time.Time, startsAt time.Time, endsAt time.Time) bool {
-	matched := false
 	for _, benefit := range benefits {
 		awardedAt, ok := claimedBenefits[benefit.ID]
 		if !ok {
 			continue
 		}
-		matched = true
-		if awardedAt.Before(startsAt) || !awardedAt.Before(endsAt) {
-			return false
+		if !awardedAt.Before(startsAt) && awardedAt.Before(endsAt) {
+			return true
 		}
 	}
 
-	return matched
+	return false
 }
 
 func parsePreconditionDropIDs(value any) []string {

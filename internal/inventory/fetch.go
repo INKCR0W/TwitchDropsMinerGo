@@ -140,7 +140,8 @@ func (r *Refresher) fetchRewardCampaigns(ctx context.Context, now time.Time) (ma
 
 			converted, ok, err := rewardCampaignToDropCampaignWithProgress(campaign, now, rewardProgressMinutes[campaignID])
 			if err != nil {
-				return nil, err
+				r.logger.Warn("跳过无法解析的 reward campaign", "campaign_id", stringValue(campaign, "id"), "error", err)
+				continue
 			}
 			if !ok {
 				continue

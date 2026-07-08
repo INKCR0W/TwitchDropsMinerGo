@@ -3,6 +3,8 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -30,6 +32,7 @@ type Options struct {
 	RewardProgress map[string]rewards.Progress
 	Clock          func() time.Time
 	ChunkSize      int
+	Logger         *slog.Logger
 }
 
 type RefreshOptions struct {
@@ -46,6 +49,7 @@ type Snapshot struct {
 type Refresher struct {
 	gqlClient             GQLClient
 	authState             AuthState
+	logger                *slog.Logger
 	rewardMu              sync.RWMutex
 	completedRewardIDs    map[string]struct{}
 	rewardProgressMinutes map[string]int
@@ -71,12 +75,18 @@ func NewRefresher(options Options) (*Refresher, error) {
 		chunkSize = defaultChunkSize
 	}
 
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
 	completedRewardIDs := rewards.CompletedCampaignIDs(options.RewardProgress)
 	rewardProgressMinutes := rewardMinutesByCampaignID(options.RewardProgress)
 
 	return &Refresher{
 		gqlClient:             options.GQLClient,
 		authState:             options.AuthState,
+		logger:                logger,
 		completedRewardIDs:    completedRewardIDs,
 		rewardProgressMinutes: rewardProgressMinutes,
 		now:                   now,
@@ -182,7 +192,7 @@ func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapsh
 		return Snapshot{}, fmt.Errorf("合并 RewardCampaigns 数据失败: %w", err)
 	}
 
-	campaigns, err := buildCampaigns(mergedPayload, claimedBenefits)
+	campaigns, err := buildCampaigns(mergedPayload, claimedBenefits, r.logger)
 	if err != nil {
 		return Snapshot{}, err
 	}

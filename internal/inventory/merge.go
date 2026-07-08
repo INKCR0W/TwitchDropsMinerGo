@@ -226,6 +226,34 @@ func intValue(source map[string]any, key string) int {
 	return int(int64Value(source, key))
 }
 
+func int64ValuePresent(source map[string]any, key string) (int64, bool) {
+	if len(source) == 0 {
+		return 0, false
+	}
+
+	value, ok := source[key]
+	if !ok || value == nil {
+		return 0, false
+	}
+
+	switch typed := value.(type) {
+	case int:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case float64:
+		return int64(typed), true
+	case string:
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64); err == nil {
+			return parsed, true
+		}
+	}
+
+	return 0, false
+}
+
 func timeValue(source map[string]any, key string) time.Time {
 	raw := stringValue(source, key)
 	if raw == "" {
