@@ -291,6 +291,62 @@ func TestShardResponseErrorClearsSubmittedAndReconnects(t *testing.T) {
 	_ = conn2.waitForType(t, "LISTEN", time.Second)
 }
 
+func TestShardPerTopicErrorDropsTopicWithoutReconnect(t *testing.T) {
+	t.Parallel()
+
+	conn1 := newFakeConn()
+	conn2 := newFakeConn()
+	dialer := &fakeDialer{connections: []*fakeConn{conn1, conn2}}
+	manager := newTestManager(t, Options{
+		Auth: &stubAuthState{
+			snapshot: auth.Snapshot{AccessToken: "token-badtopic"},
+		},
+		Dialer:          dialer,
+		ReadTimeout:     5 * time.Millisecond,
+		PingInterval:    time.Hour,
+		ShardTopicLimit: 10,
+		Sleep: func(context.Context, time.Duration) error {
+			return nil
+		},
+	})
+
+	topic := MustNewTopic(CategoryUser, TopicDrops, 77, nil)
+	if err := manager.AddTopics(topic); err != nil {
+		t.Fatalf("AddTopics 返回错误: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("Start 返回错误: %v", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		defer stopCancel()
+		_ = manager.Stop(stopCtx, true)
+	}()
+
+	listen := conn1.waitForType(t, "LISTEN", time.Second)
+	nonce, _ := listen["nonce"].(string)
+	if nonce == "" {
+		t.Fatalf("LISTEN 应包含 nonce: %#v", listen)
+	}
+
+	// 非认证类 per-topic 错误：应丢弃该 topic 并保持连接，而不是拆连接重连
+	conn1.pushText(t, map[string]any{
+		"type":  "RESPONSE",
+		"nonce": nonce,
+		"error": "ERR_BADTOPIC",
+	})
+
+	waitUntil(t, time.Second, func() bool {
+		return manager.Status().TopicCount == 0
+	})
+	if got := dialer.CallCount(); got != 1 {
+		t.Fatalf("per-topic 错误不应触发重连，实际 dial 次数为 %d", got)
+	}
+}
+
 func TestManagerWaitUntilConnectedWaitsForListenAck(t *testing.T) {
 	t.Parallel()
 

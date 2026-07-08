@@ -19,7 +19,6 @@ import (
 const (
 	defaultPingInterval = 3 * time.Minute
 	defaultPingTimeout  = 10 * time.Second
-	defaultHandlerLimit = 64
 )
 
 var (
@@ -63,7 +62,6 @@ type Options struct {
 	Now             func() time.Time
 	Sleep           func(context.Context, time.Duration) error
 	NonceGenerator  func() (string, error)
-	HandlerLimit    int
 }
 
 type Status struct {
@@ -106,7 +104,6 @@ type Manager struct {
 	now             func() time.Time
 	sleep           func(context.Context, time.Duration) error
 	nonceGenerator  func() (string, error)
-	handlerSlots    chan struct{}
 
 	mu      sync.Mutex
 	running bool
@@ -185,11 +182,6 @@ func NewManager(options Options) (*Manager, error) {
 		nonceGenerator = generateNonce
 	}
 
-	handlerLimit := options.HandlerLimit
-	if handlerLimit <= 0 {
-		handlerLimit = defaultHandlerLimit
-	}
-
 	dialer := options.Dialer
 	if dialer == nil {
 		defaultDialer, err := newGorillaDialer(options.ProxyURL)
@@ -215,7 +207,6 @@ func NewManager(options Options) (*Manager, error) {
 		now:             now,
 		sleep:           sleep,
 		nonceGenerator:  nonceGenerator,
-		handlerSlots:    make(chan struct{}, handlerLimit),
 		changed:         make(chan struct{}, 1),
 	}, nil
 }
@@ -397,13 +388,13 @@ func (m *Manager) AddTopics(topics ...Topic) error {
 		m.shards = append(m.shards, shard)
 		newShards = append(newShards, shard)
 	}
-	m.mu.Unlock()
 
 	if running {
 		for _, shard := range newShards {
 			shard.start(runCtx)
 		}
 	}
+	m.mu.Unlock()
 
 	m.signalChanged()
 	return nil
@@ -498,7 +489,7 @@ func (m *Manager) trimEmptyShards() {
 		if shard.topicCount() == 0 {
 			continue
 		}
-		shard.index = len(filtered)
+		shard.setIndex(len(filtered))
 		filtered = append(filtered, shard)
 	}
 	m.shards = filtered

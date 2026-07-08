@@ -26,8 +26,11 @@ type shard struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	wake      chan struct{}
+	events    chan Event
 	started   bool
 }
+
+const eventBufferSize = 64
 
 type pendingSubmission struct {
 	action string
@@ -60,11 +63,41 @@ func (s *shard) start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
 	s.done = make(chan struct{})
+	events := make(chan Event, eventBufferSize)
+	s.events = events
 	s.started = true
 	s.mu.Unlock()
 
 	s.manager.wg.Add(1)
 	go s.run(ctx)
+
+	s.manager.wg.Add(1)
+	go s.dispatchLoop(ctx, events)
+}
+
+func (s *shard) dispatchLoop(ctx context.Context, events <-chan Event) {
+	defer s.manager.wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-events:
+			handler := event.Topic.Handler()
+			if handler == nil {
+				continue
+			}
+			if err := handler(ctx, event); err != nil && ctx.Err() == nil {
+				s.manager.logger.Warn("处理 PubSub 事件失败", "shard", s.index, "topic", event.Topic.Key(), "error", err)
+			}
+		}
+	}
+}
+
+func (s *shard) eventsChan() chan Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.events
 }
 
 func (s *shard) stop(clearTopics bool) {
@@ -377,7 +410,8 @@ func (s *shard) handleInbound(ctx context.Context, messageType int, payload []by
 
 	var envelope inboundEnvelope
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return false, false, fmt.Errorf("解析 PubSub 消息失败: %w", err)
+		s.manager.logger.Warn("跳过无法解析的 PubSub 消息", "shard", s.index, "error", err)
+		return false, false, nil
 	}
 
 	switch envelope.Type {
@@ -426,20 +460,17 @@ func (s *shard) dispatchMessage(ctx context.Context, payload json.RawMessage) er
 		ReceivedAt: s.manager.now().UTC(),
 	}
 
+	events := s.eventsChan()
+	if events == nil {
+		return nil
+	}
 	select {
-	case s.manager.handlerSlots <- struct{}{}:
+	case events <- event:
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
+		s.manager.logger.Warn("PubSub 事件队列已满，丢弃事件", "shard", s.index, "topic", topic.Key())
 	}
-
-	s.manager.wg.Add(1)
-	go func() {
-		defer s.manager.wg.Done()
-		defer func() { <-s.manager.handlerSlots }()
-		if err := topic.Handler()(ctx, event); err != nil && ctx.Err() == nil {
-			s.manager.logger.Warn("处理 PubSub 事件失败", "shard", s.index, "topic", topic.Key(), "error", err)
-		}
-	}()
 
 	return nil
 }
@@ -484,6 +515,12 @@ func (s *shard) topicCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.topics)
+}
+
+func (s *shard) setIndex(index int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.index = index
 }
 
 func (s *shard) addTopic(topic Topic, limit int) bool {
@@ -659,11 +696,22 @@ func (s *shard) resolvePending(nonce string, responseErr string) error {
 	s.mu.Unlock()
 
 	if responseErr != "" {
-		action := pending.action
-		if action == "" {
-			action = "请求"
+		if isAuthResponseError(responseErr) {
+			action := pending.action
+			if action == "" {
+				action = "请求"
+			}
+			return fmt.Errorf("PubSub %s 认证被拒绝: %s", action, responseErr)
 		}
-		return fmt.Errorf("PubSub %s 被拒绝: %s", action, responseErr)
+		s.manager.logger.Warn("PubSub 订阅被拒绝，丢弃相关 topic 并保持连接",
+			"shard", s.index, "action", pending.action, "error", responseErr, "topics", pending.topics)
+		if pending.action == "LISTEN" {
+			s.removeTopics(pending.topics)
+		} else {
+			s.markUnsubmitted(pending.topics)
+		}
+		s.refreshConnectedState()
+		return nil
 	}
 	if !ok {
 		return nil
@@ -677,6 +725,11 @@ func (s *shard) resolvePending(nonce string, responseErr string) error {
 	}
 	s.refreshConnectedState()
 	return nil
+}
+
+func isAuthResponseError(responseErr string) bool {
+	upper := strings.ToUpper(responseErr)
+	return strings.Contains(upper, "BADAUTH") || strings.Contains(upper, "UNAUTHORIZED")
 }
 
 func (s *shard) markSubmitted(keys []string, current map[string]Topic) {

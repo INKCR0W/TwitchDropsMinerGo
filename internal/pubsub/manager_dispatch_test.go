@@ -72,7 +72,7 @@ func TestManagerDispatchesIncomingMessage(t *testing.T) {
 	}
 }
 
-func TestManagerLimitsConcurrentHandlers(t *testing.T) {
+func TestManagerProcessesHandlersSerially(t *testing.T) {
 	t.Parallel()
 
 	conn := newFakeConn()
@@ -83,7 +83,6 @@ func TestManagerLimitsConcurrentHandlers(t *testing.T) {
 		Dialer:       &fakeDialer{connections: []*fakeConn{conn}},
 		ReadTimeout:  5 * time.Millisecond,
 		PingInterval: time.Hour,
-		HandlerLimit: 1,
 	})
 
 	entered := make(chan struct{}, 2)
@@ -127,7 +126,7 @@ func TestManagerLimitsConcurrentHandlers(t *testing.T) {
 	}
 	select {
 	case <-entered:
-		t.Fatal("HandlerLimit=1 时第二个 handler 不应并发启动")
+		t.Fatal("串行分发时，第一个 handler 阻塞期间第二个 handler 不应启动")
 	case <-time.After(50 * time.Millisecond):
 	}
 }
