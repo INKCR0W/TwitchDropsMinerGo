@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	defaultDeviceEndpoint   = "https://id.twitch.tv/oauth2/device"
-	defaultTokenEndpoint    = "https://id.twitch.tv/oauth2/token"
-	defaultValidateEndpoint = "https://id.twitch.tv/oauth2/validate"
-	sessionIDLength         = 16
+	defaultDeviceEndpoint     = "https://id.twitch.tv/oauth2/device"
+	defaultTokenEndpoint      = "https://id.twitch.tv/oauth2/token"
+	defaultValidateEndpoint   = "https://id.twitch.tv/oauth2/validate"
+	sessionIDLength           = 16
+	defaultRevalidateInterval = time.Hour
 )
 
 type Snapshot struct {
@@ -38,27 +39,30 @@ type Options struct {
 	Sleep              func(context.Context, time.Duration) error
 	SessionIDGenerator func() (string, error)
 	DeviceCodeHandler  DeviceCodeHandler
+	RevalidateInterval time.Duration
 }
 
 type State struct {
-	httpClient       *httpclient.Client
-	clientInfo       httpclient.ClientInfo
-	clientURL        *url.URL
-	deviceEndpoint   string
-	tokenEndpoint    string
-	validateEndpoint string
-	now              func() time.Time
-	sleep            func(context.Context, time.Duration) error
-	generateSession  func() (string, error)
-	onDeviceCode     DeviceCodeHandler
+	httpClient         *httpclient.Client
+	clientInfo         httpclient.ClientInfo
+	clientURL          *url.URL
+	deviceEndpoint     string
+	tokenEndpoint      string
+	validateEndpoint   string
+	now                func() time.Time
+	sleep              func(context.Context, time.Duration) error
+	generateSession    func() (string, error)
+	onDeviceCode       DeviceCodeHandler
+	revalidateInterval time.Duration
 
-	validateMu    sync.Mutex
-	mu            sync.Mutex
-	userID        int64
-	deviceID      string
-	sessionID     string
-	accessToken   string
-	clientVersion string
+	validateMu      sync.Mutex
+	mu              sync.Mutex
+	userID          int64
+	deviceID        string
+	sessionID       string
+	accessToken     string
+	clientVersion   string
+	lastValidatedAt time.Time
 }
 
 func New(options Options) (*State, error) {
@@ -111,17 +115,23 @@ func New(options Options) (*State, error) {
 		validateEndpoint = defaultValidateEndpoint
 	}
 
+	revalidateInterval := options.RevalidateInterval
+	if revalidateInterval <= 0 {
+		revalidateInterval = defaultRevalidateInterval
+	}
+
 	return &State{
-		httpClient:       options.HTTPClient,
-		clientInfo:       clientInfo,
-		clientURL:        clientURL,
-		deviceEndpoint:   deviceEndpoint,
-		tokenEndpoint:    tokenEndpoint,
-		validateEndpoint: validateEndpoint,
-		now:              now,
-		sleep:            sleep,
-		generateSession:  generateSession,
-		onDeviceCode:     options.DeviceCodeHandler,
+		httpClient:         options.HTTPClient,
+		clientInfo:         clientInfo,
+		clientURL:          clientURL,
+		deviceEndpoint:     deviceEndpoint,
+		tokenEndpoint:      tokenEndpoint,
+		validateEndpoint:   validateEndpoint,
+		now:                now,
+		sleep:              sleep,
+		generateSession:    generateSession,
+		onDeviceCode:       options.DeviceCodeHandler,
+		revalidateInterval: revalidateInterval,
 	}, nil
 }
 
@@ -151,7 +161,8 @@ func (s *State) Validate(ctx context.Context) error {
 	}
 
 	hasDevice := s.deviceID != ""
-	alreadyAuthenticated := s.accessToken != "" && s.userID != 0
+	alreadyAuthenticated := s.accessToken != "" && s.userID != 0 &&
+		s.now().UTC().Before(s.lastValidatedAt.Add(s.revalidateInterval))
 	s.mu.Unlock()
 
 	if !hasDevice {

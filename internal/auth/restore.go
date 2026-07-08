@@ -183,6 +183,7 @@ func (s *State) setValidatedAccessState(userID int64) {
 	defer s.mu.Unlock()
 
 	s.userID = userID
+	s.lastValidatedAt = s.now().UTC()
 }
 
 func (s *State) cookieValue(name string) string {
