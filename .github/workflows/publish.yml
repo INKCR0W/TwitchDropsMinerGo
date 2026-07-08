@@ -50,9 +50,17 @@ jobs:
             exit 1
           fi
 
-          set -a
-          source "$metadata_path"
-          set +a
+          read_meta() {
+            local line
+            line="$(grep -m1 "^${1}=" "$metadata_path" || true)"
+            printf '%s' "${line#*=}"
+          }
+          EVENT_NAME="$(read_meta EVENT_NAME)"
+          ASSET_CHANNEL="$(read_meta ASSET_CHANNEL)"
+          RELEASE_KIND="$(read_meta RELEASE_KIND)"
+          RELEASE_TAG="$(read_meta RELEASE_TAG)"
+          RELEASE_TITLE="$(read_meta RELEASE_TITLE)"
+          RELEASE_TARGET="$(read_meta RELEASE_TARGET)"
 
           if [[ "${EVENT_NAME:-}" != "push" ]]; then
             echo "拒绝发布非 push 事件产物: EVENT_NAME=${EVENT_NAME:-}" >&2

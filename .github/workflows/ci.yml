@@ -57,16 +57,16 @@ jobs:
           metadata_path="dist/meta/release-metadata.env"
 
           {
-            printf 'ARTIFACT_PREFIX=%q\n' "$artifact_prefix"
-            printf 'ASSET_CHANNEL=%q\n' "$asset_channel"
-            printf 'EVENT_NAME=%q\n' "$event_name"
-            printf 'RELEASE_KIND=%q\n' "$release_kind"
-            printf 'RELEASE_TAG=%q\n' "$release_tag"
-            printf 'RELEASE_TARGET=%q\n' "$release_target"
-            printf 'RELEASE_TITLE=%q\n' "$release_title"
-            printf 'SOURCE_NAME=%q\n' "$source_name"
-            printf 'SOURCE_REF=%q\n' "$source_ref"
-            printf 'SOURCE_SHA=%q\n' "${GITHUB_SHA}"
+            printf 'ARTIFACT_PREFIX=%s\n' "$artifact_prefix"
+            printf 'ASSET_CHANNEL=%s\n' "$asset_channel"
+            printf 'EVENT_NAME=%s\n' "$event_name"
+            printf 'RELEASE_KIND=%s\n' "$release_kind"
+            printf 'RELEASE_TAG=%s\n' "$release_tag"
+            printf 'RELEASE_TARGET=%s\n' "$release_target"
+            printf 'RELEASE_TITLE=%s\n' "$release_title"
+            printf 'SOURCE_NAME=%s\n' "$source_name"
+            printf 'SOURCE_REF=%s\n' "$source_ref"
+            printf 'SOURCE_SHA=%s\n' "${GITHUB_SHA}"
           } > "$metadata_path"
 
           echo "artifact_prefix=$artifact_prefix" >> "$GITHUB_OUTPUT"
@@ -107,7 +107,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
       - name: GolangCI-Lint
         if: runner.os == 'Linux'
