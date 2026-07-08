@@ -5,17 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"twitchdropsminergo/internal/httpclient"
 )
 
 const (
-	defaultEndpoint   = "https://gql.twitch.tv/gql"
-	forcedRetryDelay  = 5 * time.Second
-	defaultBackoffMax = 60 * time.Second
+	defaultEndpoint    = "https://gql.twitch.tv/gql"
+	forcedRetryDelay   = 5 * time.Second
+	defaultBackoffMax  = 60 * time.Second
+	defaultMaxAttempts = 5
 )
 
 type Limiter interface {
@@ -32,6 +36,8 @@ type ClientOptions struct {
 	Endpoint        string
 	Backoff         httpclient.BackoffConfig
 	Sleep           func(context.Context, time.Duration) error
+	Logger          *slog.Logger
+	MaxAttempts     int
 }
 
 type Client struct {
@@ -42,6 +48,8 @@ type Client struct {
 	endpoint        string
 	backoff         httpclient.BackoffConfig
 	sleep           func(context.Context, time.Duration) error
+	logger          *slog.Logger
+	maxAttempts     int
 }
 
 type Response struct {
@@ -120,6 +128,16 @@ func NewClient(options ClientOptions) (*Client, error) {
 		sleep = sleepContext
 	}
 
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	maxAttempts := options.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+
 	return &Client{
 		httpClient:      options.HTTPClient,
 		clientInfo:      clientInfo,
@@ -128,6 +146,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 		endpoint:        endpoint,
 		backoff:         backoff,
 		sleep:           sleep,
+		logger:          logger,
+		maxAttempts:     maxAttempts,
 	}, nil
 }
 
@@ -184,7 +204,9 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 	}
 
 	allowSingleRetry := true
+	attempt := 0
 	for {
+		attempt++
 		if err := c.limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
@@ -204,6 +226,20 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 			return nil, err
 		}
 
+		if response.StatusCode == http.StatusTooManyRequests {
+			if attempt >= c.maxAttempts {
+				return nil, &RequestError{Message: fmt.Sprintf("GQL 请求被限流(429)，重试 %d 次仍失败", c.maxAttempts)}
+			}
+			delay := backoff.Next()
+			if retryAfter := retryAfterDelay(response.Header); retryAfter > delay {
+				delay = retryAfter
+			}
+			if err := c.sleep(ctx, delay); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
 		var responses []Response
 		if single {
 			var parsed Response
@@ -220,7 +256,7 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 			}
 		}
 
-		retry, consumeSingleRetry, minimumDelay, err := handleResponses(responses, allowSingleRetry)
+		retry, consumeSingleRetry, minimumDelay, err := c.handleResponses(responses, allowSingleRetry)
 		if err != nil {
 			return nil, err
 		}
@@ -230,6 +266,9 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 		if consumeSingleRetry {
 			allowSingleRetry = false
 		}
+		if attempt >= c.maxAttempts {
+			return nil, retryExhaustedError(responses, c.maxAttempts)
+		}
 
 		delay := backoff.Next()
 		if minimumDelay > delay {
@@ -238,6 +277,44 @@ func (c *Client) do(ctx context.Context, payload any, single bool) ([]Response, 
 		if err := c.sleep(ctx, delay); err != nil {
 			return nil, err
 		}
+	}
+}
+
+func retryAfterDelay(header http.Header) time.Duration {
+	value := header.Get("Retry-After")
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(when); delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+
+func retryExhaustedError(responses []Response, attempts int) error {
+	var responseErrors []ResponseError
+	operation := ""
+	for index := range responses {
+		if operation == "" {
+			operation = operationName(responses[index])
+		}
+		if len(responses[index].Errors) > 0 {
+			responseErrors = responses[index].Errors
+			break
+		}
+	}
+	return &RequestError{
+		Operation: operation,
+		Message:   fmt.Sprintf("GQL 请求重试 %d 次仍未成功", attempts),
+		Errors:    append([]ResponseError(nil), responseErrors...),
 	}
 }
 
@@ -288,11 +365,13 @@ func (c *Client) buildHeaders(ctx context.Context) (http.Header, error) {
 	return headers, nil
 }
 
-func handleResponses(responses []Response, allowSingleRetry bool) (retry bool, consumeSingleRetry bool, minimumDelay time.Duration, err error) {
+func (c *Client) handleResponses(responses []Response, allowSingleRetry bool) (retry bool, consumeSingleRetry bool, minimumDelay time.Duration, err error) {
 	for index := range responses {
 		response := &responses[index]
 		if len(response.Errors) > 0 {
 			if hasOnlyNonFatalErrors(*response) && response.Error == "" {
+				c.logger.Warn("GQL 响应带 failed integrity check，已容忍并返回部分数据",
+					"operation", operationName(*response))
 				continue
 			}
 			allHandled := true
@@ -305,7 +384,7 @@ func handleResponses(responses []Response, allowSingleRetry bool) (retry bool, c
 					allHandled = false
 				case "server error":
 					if err := nullifyPath(response, responseError.Path); err != nil {
-						return false, false, 0, err
+						return false, false, 0, newRequestError(*response)
 					}
 				case "service timeout", "service unavailable", "context deadline exceeded":
 					return true, false, 0, nil

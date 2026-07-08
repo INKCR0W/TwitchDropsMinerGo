@@ -626,6 +626,78 @@ func TestClientRetriesServiceUnavailableUntilSuccess(t *testing.T) {
 	}
 }
 
+func TestClientRetriesRateLimitedResponse(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, "rate limited")
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"ok":true},"extensions":{"operationName":"Inventory"}}`)
+	}))
+	defer server.Close()
+
+	var sleeps atomic.Int32
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t),
+		Endpoint:   server.URL,
+		Limiter:    &stubLimiter{},
+		Sleep: func(context.Context, time.Duration) error {
+			sleeps.Add(1)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	if _, err := client.Do(context.Background(), MustLookup(OperationInventory)); err != nil {
+		t.Fatalf("429 应被退避重试而非失败: %v", err)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("期望请求 2 次，实际为 %d", attempts.Load())
+	}
+	if sleeps.Load() != 1 {
+		t.Fatalf("429 应触发一次退避睡眠，实际为 %d", sleeps.Load())
+	}
+}
+
+func TestClientStopsRetryingAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		_, _ = io.WriteString(w, `{"errors":[{"message":"service unavailable"}],"extensions":{"operationName":"Inventory"}}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		HTTPClient:  newTestHTTPClient(t),
+		Endpoint:    server.URL,
+		Limiter:     &stubLimiter{},
+		MaxAttempts: 3,
+		Sleep: func(context.Context, time.Duration) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("创建 GQL 客户端失败: %v", err)
+	}
+
+	_, err = client.Do(context.Background(), MustLookup(OperationInventory))
+	if !IsRequestError(err) {
+		t.Fatalf("重试耗尽应返回 RequestError，实际为 %v", err)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("期望重试上限 3 次，实际为 %d", attempts.Load())
+	}
+}
+
 func TestClientPropagatesHeaderProviderError(t *testing.T) {
 	t.Parallel()
 
