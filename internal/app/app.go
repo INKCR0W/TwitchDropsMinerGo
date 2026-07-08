@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"twitchdropsminergo/internal/config"
+	"twitchdropsminergo/internal/storage"
 )
 
 const stateSchemaVersion = 2
@@ -73,7 +74,11 @@ func New(options Options) (*App, error) {
 	if options.StateStore != nil {
 		loadedState, err := options.StateStore.Load()
 		if err != nil {
-			return nil, fmt.Errorf("加载运行时状态失败: %w", err)
+			if !errors.Is(err, storage.ErrCorrupt) {
+				return nil, fmt.Errorf("加载运行时状态失败: %w", err)
+			}
+			options.Logger.Warn("运行时状态文件损坏，使用默认状态继续", "error", err)
+			loadedState = DefaultRuntimeState()
 		}
 
 		if loadedState.SchemaVersion < stateSchemaVersion {
@@ -108,7 +113,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	if err := a.markStarted(); err != nil {
-		return err
+		a.logger.Warn("保存启动状态失败，继续运行", "error", err)
 	}
 
 	state := a.RuntimeState()
@@ -121,7 +126,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	if err := a.markStopped(); err != nil {
-		return err
+		a.logger.Warn("保存停止状态失败", "error", err)
 	}
 
 	state = a.RuntimeState()

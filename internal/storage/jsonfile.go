@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 )
 
+var ErrCorrupt = errors.New("JSON 文件已损坏或无法解析")
+
 type JSONFile[T any] struct {
 	path     string
 	defaults T
@@ -54,7 +56,7 @@ func LoadJSONFile[T any](path string, defaults T) (T, error) {
 		}
 
 		var zero T
-		return zero, fmt.Errorf("解析 JSON 文件 %q 失败: %w", sourcePath, err)
+		return zero, fmt.Errorf("%w: 解析 JSON 文件 %q 失败: %v", ErrCorrupt, sourcePath, err)
 	}
 
 	return value, nil
@@ -110,7 +112,18 @@ func SaveJSONFile(path string, value any) error {
 		return fmt.Errorf("清理备份文件失败: %w", err)
 	}
 
+	syncDir(directory)
+
 	return nil
+}
+
+func syncDir(directory string) {
+	dir, err := os.Open(directory)
+	if err != nil {
+		return
+	}
+	_ = dir.Sync()
+	_ = dir.Close()
 }
 
 func readPrimaryOrBackup(path string) ([]byte, string, error) {

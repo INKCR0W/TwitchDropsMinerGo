@@ -31,12 +31,14 @@ func (l *InstanceLock) Close() error {
 		return nil
 	}
 
-	if err := l.lock.Unlock(); err != nil {
-		return fmt.Errorf("释放锁 %q 失败: %w", l.lock.Path(), err)
-	}
+	unlockErr := l.lock.Unlock()
+	closeErr := l.lock.Close()
 
-	if err := l.lock.Close(); err != nil {
-		return fmt.Errorf("关闭锁文件 %q 失败: %w", l.lock.Path(), err)
+	if unlockErr != nil {
+		return fmt.Errorf("释放锁 %q 失败: %w", l.lock.Path(), unlockErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("关闭锁文件 %q 失败: %w", l.lock.Path(), closeErr)
 	}
 
 	return nil
