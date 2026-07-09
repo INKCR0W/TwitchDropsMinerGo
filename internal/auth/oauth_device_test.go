@@ -35,7 +35,7 @@ func TestStateValidatePerformsDeviceCodeLoginAndPersistsSession(t *testing.T) {
 		t.Fatalf("轮询次数不匹配: %#v", fixture.sleeps)
 	}
 
-	reloadedJar, err := httpclient.NewPersistentJar(fixture.cookiesPath)
+	reloadedJar, err := httpclient.NewPersistentJar(fixture.cookiesPath, nil)
 	if err != nil {
 		t.Fatalf("重新创建 Cookie Jar 失败: %v", err)
 	}

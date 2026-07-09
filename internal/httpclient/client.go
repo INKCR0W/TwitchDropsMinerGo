@@ -122,7 +122,7 @@ func New(options Options) (*Client, error) {
 	connectTimeout := time.Duration(5*quality) * time.Second
 	requestTimeout := time.Duration(10*quality) * time.Second
 
-	jar, err := NewPersistentJar(options.CookiesPath)
+	jar, err := NewPersistentJar(options.CookiesPath, logger)
 	if err != nil {
 		return nil, err
 	}

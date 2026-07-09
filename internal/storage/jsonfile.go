@@ -30,6 +30,7 @@ func (f *JSONFile[T]) Save(value T) error {
 	return SaveJSONFile(f.path, value)
 }
 
+// LoadJSONFile 在解码失败时可能已写入 defaults 中的 map,调用方不得复用该值
 func LoadJSONFile[T any](path string, defaults T) (T, error) {
 	value := defaults
 
@@ -180,4 +181,28 @@ func restoreFromBackup(path string, backupPath string) error {
 
 func backupPathFor(path string) string {
 	return path + ".bak"
+}
+
+// QuarantineCorrupt 把 path 及其备份改名为 .corrupt 后缀,返回实际移走的路径
+func QuarantineCorrupt(path string) ([]string, error) {
+	moved := make([]string, 0, 2)
+	for _, source := range []string{path, backupPathFor(path)} {
+		if _, err := os.Stat(source); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return moved, err
+		}
+
+		target := source + ".corrupt"
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return moved, err
+		}
+		if err := os.Rename(source, target); err != nil {
+			return moved, err
+		}
+		moved = append(moved, target)
+	}
+
+	return moved, nil
 }

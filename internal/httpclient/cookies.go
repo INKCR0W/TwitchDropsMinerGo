@@ -1,7 +1,10 @@
 package httpclient
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -41,20 +44,33 @@ type persistedCookie struct {
 type PersistentJar struct {
 	path   string
 	jar    *cookiejar.Jar
+	logger *slog.Logger
 	mu     sync.Mutex
 	saveMu sync.Mutex
 	stored map[string]map[cookieKey]persistedCookie
 }
 
-func NewPersistentJar(path string) (*PersistentJar, error) {
+func newEmptyPersistedJar() persistedJar {
+	return persistedJar{
+		SchemaVersion: cookieSchemaVersion,
+		Cookies:       map[string][]persistedCookie{},
+	}
+}
+
+func NewPersistentJar(path string, logger *slog.Logger) (*PersistentJar, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建 Cookie Jar 失败: %w", err)
 	}
 
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
 	persistentJar := &PersistentJar{
 		path:   path,
 		jar:    jar,
+		logger: logger,
 		stored: make(map[string]map[cookieKey]persistedCookie),
 	}
 
@@ -178,11 +194,32 @@ func (j *PersistentJar) Load() error {
 		return nil
 	}
 
-	fileData, err := storage.LoadJSONFile(j.path, persistedJar{
-		SchemaVersion: cookieSchemaVersion,
-		Cookies:       map[string][]persistedCookie{},
-	})
-	if err != nil {
+	fileData, err := storage.LoadJSONFile(j.path, newEmptyPersistedJar())
+	switch {
+	case errors.Is(err, storage.ErrCorrupt):
+		// 损坏即丢 auth-token,以空 jar 继续交给 device code 流程重新登录;
+		// 隔离只是尽力保留现场,失败也不能让 24/7 服务退出
+		quarantined, quarantineErr := storage.QuarantineCorrupt(j.path)
+		if quarantineErr != nil {
+			j.logger.Warn(
+				"隔离损坏的 Cookie 文件失败，仍将以空 jar 重新登录",
+				"path", j.path,
+				"quarantined", quarantined,
+				"error", quarantineErr,
+				"cause", err,
+			)
+		} else {
+			j.logger.Warn(
+				"Cookie 文件已损坏，已隔离并将重新登录",
+				"path", j.path,
+				"quarantined", quarantined,
+				"error", err,
+			)
+		}
+		// LoadJSONFile 会把 defaults 的 map 直接喂给 json.Unmarshal,类型不匹配时
+		// 它已被部分填充,不能复用
+		fileData = newEmptyPersistedJar()
+	case err != nil:
 		return fmt.Errorf("读取 Cookie Jar 失败: %w", err)
 	}
 

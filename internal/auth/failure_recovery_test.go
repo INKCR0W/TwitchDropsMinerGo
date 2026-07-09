@@ -102,7 +102,7 @@ func TestStateValidateRetriesAfterInvalidCookieToken(t *testing.T) {
 		t.Fatalf("调用次数不匹配: device=%d token=%d validate=%d", deviceHits.Load(), tokenHits.Load(), validateHits.Load())
 	}
 
-	reloadedJar, err := httpclient.NewPersistentJar(cookiesPath)
+	reloadedJar, err := httpclient.NewPersistentJar(cookiesPath, nil)
 	if err != nil {
 		t.Fatalf("重新创建 Cookie Jar 失败: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestStateValidateClearsCookieJarOnClientMismatch(t *testing.T) {
 		t.Fatalf("调用次数不匹配: device=%d token=%d validate=%d", deviceHits.Load(), tokenHits.Load(), validateHits.Load())
 	}
 
-	reloadedJar, err := httpclient.NewPersistentJar(cookiesPath)
+	reloadedJar, err := httpclient.NewPersistentJar(cookiesPath, nil)
 	if err != nil {
 		t.Fatalf("重新创建 Cookie Jar 失败: %v", err)
 	}
