@@ -150,7 +150,7 @@ type Scheduler struct {
 	selectedChannelID        int64
 	watchingChannelID        int64
 	lastProgressAt           time.Time
-	lastLoggedProgressDropID string
+	announcedProgressDropIDs map[string]struct{}
 	lastRuntimeError         error
 	maintenanceCancel        context.CancelFunc
 	userTopicUserID          int64

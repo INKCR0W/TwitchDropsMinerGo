@@ -22,6 +22,9 @@ func (s *Scheduler) watch(channelID int64) {
 	s.mu.Lock()
 	changed := s.watchingChannelID != channelID
 	s.watchingChannelID = channelID
+	if changed {
+		s.resetProgressAnnouncementsLocked()
+	}
 	channel, ok = s.channels[channelID]
 	s.mu.Unlock()
 

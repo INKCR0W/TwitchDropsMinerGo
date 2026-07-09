@@ -8,15 +8,22 @@ import (
 	"twitchdropsminergo/internal/domain"
 )
 
+func (s *Scheduler) resetProgressAnnouncementsLocked() {
+	s.announcedProgressDropIDs = nil
+}
+
 func (s *Scheduler) logDropOverviewLocked(campaign *domain.DropsCampaign, drop *domain.TimedDrop) {
 	if s == nil || campaign == nil || drop == nil {
 		return
 	}
-	if drop.ID == s.lastLoggedProgressDropID {
+	if _, announced := s.announcedProgressDropIDs[drop.ID]; announced {
 		return
 	}
+	if s.announcedProgressDropIDs == nil {
+		s.announcedProgressDropIDs = make(map[string]struct{})
+	}
+	s.announcedProgressDropIDs[drop.ID] = struct{}{}
 
-	s.lastLoggedProgressDropID = drop.ID
 	s.logger.Info(
 		"开始挂新掉落",
 		"game", gameName(campaign.Game),
