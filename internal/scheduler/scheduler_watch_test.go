@@ -164,7 +164,7 @@ func TestResolveProgressRequestsSwitchWhenExtraMinutesHitLimit(t *testing.T) {
 		},
 	}
 
-	scheduler.resolveProgress(channel)
+	scheduler.resolveProgress(context.Background(), channel, true)
 	if scheduler.State() != StateChannelSwitch {
 		t.Fatalf("达到 extra minutes 上限后应请求切台: %s", scheduler.State())
 	}
@@ -228,7 +228,7 @@ func TestResolveProgressCompletesRewardCampaignWithoutCurrentDrop(t *testing.T) 
 		},
 	}
 
-	scheduler.resolveProgress(channel)
+	scheduler.resolveProgress(context.Background(), channel, true)
 	if scheduler.State() != StateInventoryFetch {
 		t.Fatalf("reward campaign 完成后应刷新 inventory: %s", scheduler.State())
 	}
@@ -308,7 +308,7 @@ func TestResolveProgressRetriesRewardCompletionWhenPersistFails(t *testing.T) {
 		},
 	}
 
-	scheduler.resolveProgress(channel)
+	scheduler.resolveProgress(context.Background(), channel, true)
 	if scheduler.State() == StateInventoryFetch {
 		t.Fatal("reward 完成状态保存失败时不应刷新 inventory 丢失本地进度")
 	}
@@ -320,11 +320,93 @@ func TestResolveProgressRetriesRewardCompletionWhenPersistFails(t *testing.T) {
 	}
 
 	progressStore.err = nil
-	scheduler.resolveProgress(channel)
+	scheduler.resolveProgress(context.Background(), channel, true)
 	if scheduler.State() != StateInventoryFetch {
 		t.Fatalf("保存恢复后应刷新 inventory: %s", scheduler.State())
 	}
 	if record, ok := progressStore.lastRecord(); !ok || record.CampaignID != "reward:builder-cape" || record.MinutesWatched != domain.MaxExtraMinutes {
 		t.Fatalf("保存恢复后应写入完成态: %#v ok=%v", record, ok)
+	}
+}
+
+func currentDropGQLClient(dropID string, currentMinutes int) *fakeGQLClient {
+	return &fakeGQLClient{
+		doFunc: func(_ context.Context, operation gql.Operation) (gql.Response, error) {
+			if operation.OperationName != "DropCurrentSessionContext" {
+				return gql.Response{}, nil
+			}
+			return gql.Response{
+				Data: map[string]any{
+					"currentUser": map[string]any{
+						"dropCurrentSession": map[string]any{
+							"dropID":                dropID,
+							"currentMinutesWatched": float64(currentMinutes),
+						},
+					},
+				},
+			}, nil
+		},
+	}
+}
+
+func TestResolveProgressPrefersAuthoritativeGQLProgress(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Watched"}
+	campaign := mustCampaign(t, campaignSpec(now, "campaign-gql", game, now.Add(-time.Hour), now.Add(time.Hour), nil))
+	drop := campaign.Drop("campaign-gql-drop")
+	drop.ExtraCurrentMinutes = 5
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		gqlClient: currentDropGQLClient("campaign-gql-drop", 12),
+	})
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+	scheduler.wantedGames = []domain.Game{game}
+	channel := domain.Channel{
+		ID:    1,
+		Login: "channel",
+		Stream: &domain.Stream{
+			BroadcastID:  1,
+			Game:         &game,
+			DropsEnabled: true,
+		},
+	}
+
+	scheduler.resolveProgress(context.Background(), channel, true)
+
+	if drop.RealCurrentMinutes != 12 {
+		t.Fatalf("应采用 Twitch 返回的权威分钟数, got=%d", drop.RealCurrentMinutes)
+	}
+	if drop.ExtraCurrentMinutes != 0 {
+		t.Fatalf("同步权威进度后应清零本地估算, got=%d", drop.ExtraCurrentMinutes)
+	}
+}
+
+func TestResolveProgressSkipsLocalEstimateWhenWatchNotReported(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Watched"}
+	campaign := mustCampaign(t, campaignSpec(now, "campaign-no-estimate", game, now.Add(-time.Hour), now.Add(time.Hour), nil))
+	drop := campaign.Drop("campaign-no-estimate-drop")
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+	scheduler.wantedGames = []domain.Game{game}
+	channel := domain.Channel{
+		ID:    1,
+		Login: "channel",
+		Stream: &domain.Stream{
+			BroadcastID:  1,
+			Game:         &game,
+			DropsEnabled: true,
+		},
+	}
+
+	scheduler.resolveProgress(context.Background(), channel, false)
+
+	if drop.ExtraCurrentMinutes != 0 {
+		t.Fatalf("watch 未成功送达时不应本地补分钟, got=%d", drop.ExtraCurrentMinutes)
 	}
 }

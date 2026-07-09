@@ -97,8 +97,8 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 			return
 		}
 
-		if watchReported && s.shouldResolveProgress(sentAt) {
-			s.resolveProgress(channel)
+		if s.shouldResolveProgress(sentAt) {
+			s.resolveProgress(ctx, channel, watchReported)
 		}
 
 		elapsed := s.nowUTC().Sub(sentAt)
@@ -114,7 +114,15 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 	}
 }
 
-func (s *Scheduler) resolveProgress(channel domain.Channel) {
+func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel, watchReported bool) {
+	if s.syncProgressFromGQL(ctx, channel) {
+		return
+	}
+
+	if !watchReported {
+		return
+	}
+
 	now := s.nowUTC()
 
 	completedReward, reachedLimit, updated := s.bumpActiveCampaign(now, &channel)
@@ -128,6 +136,19 @@ func (s *Scheduler) resolveProgress(channel domain.Channel) {
 	if reachedLimit {
 		s.ChangeState(StateChannelSwitch)
 	}
+}
+
+func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Channel) bool {
+	dropID, currentMinutes, ok, err := s.fetchCurrentDrop(ctx, channel.ID)
+	if err != nil {
+		s.logger.Warn("查询 CurrentDrop 失败，回退到本地估算", "channel_id", channel.ID, "error", err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+
+	return s.applyDropProgress(s.nowUTC(), &channel, dropID, currentMinutes)
 }
 
 func (s *Scheduler) fetchCurrentDrop(ctx context.Context, channelID int64) (string, int, bool, error) {
