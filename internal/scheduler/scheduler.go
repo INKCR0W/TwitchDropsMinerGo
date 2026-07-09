@@ -20,7 +20,7 @@ import (
 const (
 	DefaultWatchInterval     = 59 * time.Second
 	DefaultProgressDelay     = 20 * time.Second
-	DefaultMaintenanceReload = time.Hour
+	DefaultMaintenanceReload = 20 * time.Minute
 	DefaultErrorRetryDelay   = time.Minute
 	DefaultClaimSweepTimeout = 30 * time.Second
 	DefaultRewardPruneGrace  = 7 * 24 * time.Hour
