@@ -236,17 +236,19 @@ func parseBenefits(value any) ([]domain.Benefit, error) {
 }
 
 func inferClaimedByBenefits(benefits []domain.Benefit, claimedBenefits map[string]time.Time, startsAt time.Time, endsAt time.Time) bool {
+	awarded := false
 	for _, benefit := range benefits {
 		awardedAt, ok := claimedBenefits[benefit.ID]
 		if !ok {
 			continue
 		}
-		if !awardedAt.Before(startsAt) && awardedAt.Before(endsAt) {
-			return true
+		if awardedAt.Before(startsAt) || !awardedAt.Before(endsAt) {
+			return false
 		}
+		awarded = true
 	}
 
-	return false
+	return awarded
 }
 
 func parsePreconditionDropIDs(value any) []string {
