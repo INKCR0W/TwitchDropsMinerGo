@@ -306,7 +306,7 @@ func (s *Scheduler) canWatch(channel domain.Channel) bool {
 
 func (s *Scheduler) shouldSwitch(channel domain.Channel) bool {
 	watching := s.currentWatchingChannel()
-	if watching == nil {
+	if watching == nil || !s.canWatch(*watching) {
 		return true
 	}
 

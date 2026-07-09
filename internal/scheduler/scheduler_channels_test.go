@@ -529,3 +529,86 @@ func TestHandleChannelSwitchLogsNoWatchableAndGoesIdle(t *testing.T) {
 		t.Fatal("应输出无可观看频道的诊断日志")
 	}
 }
+
+func TestHandleChannelSwitchLeavesInvalidatedWatchingChannel(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Game"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
+	scheduler.state = StateChannelSwitch
+	scheduler.wantedGames = []domain.Game{game}
+	scheduler.snapshot = snapshotFromCampaigns(
+		mustCampaign(t, campaignSpec(now, "campaign", game, now.Add(-time.Hour), now.Add(time.Hour), nil)),
+	)
+	scheduler.channels = map[int64]domain.Channel{
+		10: {
+			ID:    10,
+			Login: "invalidated",
+			Stream: &domain.Stream{
+				BroadcastID:  100,
+				Game:         &game,
+				DropsEnabled: false,
+			},
+		},
+		20: {
+			ID:    20,
+			Login: "healthy",
+			Stream: &domain.Stream{
+				BroadcastID:  200,
+				Game:         &game,
+				DropsEnabled: true,
+			},
+		},
+	}
+	scheduler.watchingChannelID = 10
+
+	if scheduler.canWatch(scheduler.channels[10]) {
+		t.Fatal("前置条件不成立: 频道 10 应已不可观看")
+	}
+	if !scheduler.canWatch(scheduler.channels[20]) {
+		t.Fatal("前置条件不成立: 频道 20 应可观看")
+	}
+
+	scheduler.handleChannelSwitch()
+
+	if got := scheduler.WatchingChannelID(); got != 20 {
+		t.Fatalf("当前频道失效且存在同优先级健康频道时应切换过去, got=%d", got)
+	}
+	if scheduler.State() == StateIdle {
+		t.Fatal("存在可观看频道时不应进入 IDLE")
+	}
+}
+
+func TestHandleChannelSwitchIdlesWhenInvalidatedChannelHasNoReplacement(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Game"}
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
+	scheduler.state = StateChannelSwitch
+	scheduler.wantedGames = []domain.Game{game}
+	scheduler.snapshot = snapshotFromCampaigns(
+		mustCampaign(t, campaignSpec(now, "campaign", game, now.Add(-time.Hour), now.Add(time.Hour), nil)),
+	)
+	scheduler.channels = map[int64]domain.Channel{
+		10: {
+			ID:    10,
+			Login: "invalidated",
+			Stream: &domain.Stream{
+				BroadcastID:  100,
+				Game:         &game,
+				DropsEnabled: false,
+			},
+		},
+	}
+	scheduler.watchingChannelID = 10
+
+	scheduler.handleChannelSwitch()
+
+	if scheduler.State() != StateIdle {
+		t.Fatalf("当前频道失效且无可替代频道时应进入 IDLE: %s", scheduler.State())
+	}
+}
