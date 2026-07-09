@@ -512,7 +512,7 @@ func (c *DropsCampaign) baseCanEarn(now time.Time, channel *Channel, enableBadge
 	}
 
 	channelGame := channel.CurrentGame()
-	return (channelGame != nil && channelGame.ID == c.Game.ID) || c.Game.IsSpecialEvents()
+	return (channelGame != nil && channelGame.ID == c.Game.ID) || c.Game.IsSpecial()
 }
 
 func (c *DropsCampaign) allowsChannel(channelID int64) bool {

@@ -21,6 +21,25 @@ func TestGameSlugUsesExplicitValueOrGeneratedFallback(t *testing.T) {
 	}
 }
 
+func TestGameIsSpecialCoversEverySpecialCategory(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		game Game
+		want bool
+	}{
+		{name: "special events", game: Game{ID: SpecialEventsGameID, Name: "Special Events"}, want: true},
+		{name: "irl", game: Game{ID: IRLGameID, Name: "IRL"}, want: true},
+		{name: "regular game", game: Game{ID: 460630, Name: "Tom Clancy's Rainbow Six Siege"}, want: false},
+	}
+	for _, testCase := range cases {
+		if got := testCase.game.IsSpecial(); got != testCase.want {
+			t.Errorf("%s: IsSpecial() = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}
+
 func TestCampaignEligibleHonorsBadgeToggle(t *testing.T) {
 	t.Parallel()
 
@@ -537,6 +556,47 @@ func TestCampaignCanEarnWithinAndSpecialEvents(t *testing.T) {
 
 	if !specialCampaign.CanEarn(now, channel, false, false) {
 		t.Fatal("Special Events 活动应允许任意游戏频道推进")
+	}
+}
+
+func TestCampaignCanEarnOnAnyChannelForIRLGame(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	irlCampaign := mustCampaign(t, CampaignSpec{
+		ID:       "campaign-irl",
+		Name:     "irl",
+		Game:     Game{ID: IRLGameID, Name: "IRL"},
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(time.Hour),
+		Drops: []TimedDropSpec{
+			{
+				ID:              "drop-irl",
+				Name:            "drop-irl",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(time.Hour),
+				RequiredMinutes: 10,
+				Benefits: []Benefit{
+					{ID: "benefit-irl", Name: "IRL", Type: BenefitTypeDirectEntitlement},
+				},
+			},
+		},
+	})
+
+	channel := &Channel{
+		ID:    302,
+		Login: "other-game",
+		Stream: &Stream{
+			BroadcastID:  402,
+			Game:         &Game{ID: 999, Name: "Something Else"},
+			DropsEnabled: true,
+		},
+	}
+
+	if !irlCampaign.CanEarn(now, channel, false, false) {
+		t.Fatal("IRL 活动应允许任意游戏频道推进")
 	}
 }
 

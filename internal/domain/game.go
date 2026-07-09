@@ -5,7 +5,15 @@ import (
 	"strings"
 )
 
-const SpecialEventsGameID int64 = 509663
+const (
+	SpecialEventsGameID int64 = 509663
+	IRLGameID           int64 = 509672
+)
+
+var specialGameIDs = map[int64]struct{}{
+	SpecialEventsGameID: {},
+	IRLGameID:           {},
+}
 
 var (
 	gameSlugApostrophePattern = regexp.MustCompile(`'`)
@@ -32,6 +40,7 @@ func (g Game) Slug() string {
 	return slug
 }
 
-func (g Game) IsSpecialEvents() bool {
-	return g.ID == SpecialEventsGameID
+func (g Game) IsSpecial() bool {
+	_, ok := specialGameIDs[g.ID]
+	return ok
 }

@@ -296,7 +296,7 @@ func (s *Scheduler) canWatch(channel domain.Channel) bool {
 			continue
 		}
 		game := channel.CurrentGame()
-		if campaign.Game.IsSpecialEvents() ||
+		if campaign.Game.IsSpecial() ||
 			(game != nil && gameInList(*game, wantedGames) && (campaign.IsRewardCampaign || (channel.Stream != nil && channel.Stream.DropsEnabled))) {
 			return true
 		}
