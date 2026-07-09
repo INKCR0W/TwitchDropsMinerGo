@@ -19,6 +19,9 @@ import (
 const (
 	defaultPingInterval = 3 * time.Minute
 	defaultPingTimeout  = 10 * time.Second
+
+	// 低于此阈值说明服务端接受连接后立即断开,退避须继续增长而非重置
+	minConnectionLifetimeForBackoffReset = 5 * time.Second
 )
 
 var (

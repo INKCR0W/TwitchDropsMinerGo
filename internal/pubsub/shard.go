@@ -196,7 +196,7 @@ func (s *shard) run(ctx context.Context) {
 		}
 
 		s.setState(ShardStateReconnecting, false)
-		if s.manager.now().Sub(connectedAt) >= s.manager.pingInterval+s.manager.pingTimeout {
+		if s.manager.now().Sub(connectedAt) >= minConnectionLifetimeForBackoffReset {
 			backoff.Reset()
 		}
 		if err := s.manager.sleep(ctx, backoff.Next()); err != nil {
