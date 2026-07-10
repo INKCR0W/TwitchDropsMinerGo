@@ -16,6 +16,7 @@ type Layout struct {
 	StateFile    string
 	CookiesFile  string
 	RewardsFile  string
+	ProgressFile string
 	LogsDir      string
 	LogFile      string
 	LockFile     string
@@ -43,6 +44,7 @@ func ResolveLayout(rootDir string) (Layout, error) {
 		StateFile:    filepath.Join(stateDir, "state.json"),
 		CookiesFile:  filepath.Join(stateDir, "cookies.json"),
 		RewardsFile:  filepath.Join(stateDir, "rewards.json"),
+		ProgressFile: filepath.Join(stateDir, "progress.json"),
 		LogsDir:      logsDir,
 		LogFile:      filepath.Join(logsDir, "miner-server.log"),
 		LockFile:     filepath.Join(absoluteRoot, "lock.file"),

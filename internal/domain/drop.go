@@ -104,18 +104,6 @@ func (d *BaseDrop) RewardsText(delimiter string) string {
 	return strings.Join(names, delimiter)
 }
 
-func (d *BaseDrop) hasBadgeOrEmoteBenefit() bool {
-	if d == nil {
-		return false
-	}
-	for _, benefit := range d.Benefits {
-		if benefit.Type.IsBadgeOrEmote() {
-			return true
-		}
-	}
-	return false
-}
-
 func (d *BaseDrop) UpdateClaim(claimID string) {
 	if d == nil {
 		return
@@ -267,29 +255,30 @@ func (d *TimedDrop) baseEarnConditions() bool {
 		d.ExtraCurrentMinutes < MaxExtraMinutes
 }
 
-func (d *TimedDrop) cumulativeMilestoneCandidate() bool {
-	return d != nil &&
-		d.RequiredMinutes > 0 &&
-		len(d.PreconditionDropIDs) == 0
+// Twitch 对同一活动同一时间窗的 drop 只维护一个累计观看计数, 各 drop 只是阈值不同
+func (d *TimedDrop) sharesCumulativeCounter(other *TimedDrop) bool {
+	return d != nil && other != nil &&
+		d.RequiredMinutes > 0 && other.RequiredMinutes > 0 &&
+		len(d.PreconditionDropIDs) == 0 && len(other.PreconditionDropIDs) == 0 &&
+		d.StartsAt.Equal(other.StartsAt) &&
+		d.EndsAt.Equal(other.EndsAt)
 }
 
-func (d *TimedDrop) UpdateMinutes(newMinutes int) bool {
-	if d == nil {
+// 换台后 dropCurrentSession 可能回报更小的分钟数, 只增不减才不会抹掉整个活动的进度
+func (d *TimedDrop) observeMinutes(minutes int) bool {
+	if d == nil || d.IsClaimed {
+		return false
+	}
+	if minutes > d.RequiredMinutes {
+		minutes = d.RequiredMinutes
+	}
+	if minutes <= d.RealCurrentMinutes && d.ExtraCurrentMinutes == 0 {
 		return false
 	}
 
-	switch {
-	case newMinutes < 0:
-		newMinutes = 0
-	case newMinutes > d.RequiredMinutes:
-		newMinutes = d.RequiredMinutes
+	if minutes > d.RealCurrentMinutes {
+		d.RealCurrentMinutes = minutes
 	}
-
-	if d.RealCurrentMinutes == newMinutes && d.ExtraCurrentMinutes == 0 {
-		return false
-	}
-
-	d.RealCurrentMinutes = newMinutes
 	d.ExtraCurrentMinutes = 0
 	return true
 }

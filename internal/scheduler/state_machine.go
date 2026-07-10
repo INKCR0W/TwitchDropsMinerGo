@@ -69,7 +69,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				}
 			}
 		case StateChannelSwitch:
-			s.handleChannelSwitchWithContext(ctx)
+			s.handleChannelSwitch()
 		case StateExit:
 			return nil
 		default:
@@ -97,6 +97,7 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	s.logger.Info("开始刷新 inventory")
 
 	s.syncRewardProgressToRefresher()
+	s.pruneObservedProgress()
 	if err := s.pubsub.Start(ctx); err != nil {
 		return fmt.Errorf("启动 PubSub 失败: %w", err)
 	}
@@ -114,6 +115,7 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 		"drop_count", len(snapshot.Drops),
 		"maintenance_trigger_count", len(snapshot.MaintenanceTriggers),
 	)
+	s.seedObservedProgress(snapshot)
 
 	s.mu.Lock()
 	s.snapshot = snapshot
@@ -442,10 +444,6 @@ func (s *Scheduler) clearRuntimeError() {
 }
 
 func (s *Scheduler) handleChannelSwitch() {
-	s.handleChannelSwitchWithContext(context.Background())
-}
-
-func (s *Scheduler) handleChannelSwitchWithContext(ctx context.Context) {
 	var selected *domain.Channel
 	if channelID := s.selectedChannel(); channelID > 0 {
 		if channel, ok := s.channel(channelID); ok {
@@ -454,9 +452,6 @@ func (s *Scheduler) handleChannelSwitchWithContext(ctx context.Context) {
 	}
 
 	if selected != nil && s.canWatch(*selected) {
-		if s.preflightSpecialEventFullProgress(ctx, *selected) {
-			return
-		}
 		s.watch(selected.ID)
 		return
 	}
@@ -472,9 +467,6 @@ func (s *Scheduler) handleChannelSwitchWithContext(ctx context.Context) {
 	}
 
 	if newWatching != nil {
-		if s.preflightSpecialEventFullProgress(ctx, *newWatching) {
-			return
-		}
 		s.watch(newWatching.ID)
 		return
 	}

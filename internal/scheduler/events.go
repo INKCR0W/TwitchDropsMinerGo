@@ -13,11 +13,6 @@ import (
 	"twitchdropsminergo/internal/pubsub"
 )
 
-type progressApplyResult struct {
-	Updated        bool
-	RecomputeGames bool
-}
-
 func (s *Scheduler) handleStreamState(ctx context.Context, event pubsub.Event) error {
 	return s.tracker.ProcessStreamState(ctx, event.Topic.TargetID(), event.Message)
 }
@@ -205,8 +200,7 @@ func (s *Scheduler) processDropProgress(message dropEventMessage) {
 	}
 
 	watchingChannel := s.currentWatchingChannel()
-	result := s.applyDropProgressResult(s.nowUTC(), watchingChannel, message.Data.DropID, message.Data.CurrentProgressMin)
-	if !result.Updated {
+	if !s.applyDropProgress(s.nowUTC(), watchingChannel, message.Data.DropID, message.Data.CurrentProgressMin) {
 		return
 	}
 
@@ -217,9 +211,6 @@ func (s *Scheduler) processDropProgress(message dropEventMessage) {
 	}
 	attrs = append(attrs, s.watchProgressAttrs(message.Data.DropID)...)
 	s.logger.Info("收到掉宝进度更新", attrs...)
-	if result.RecomputeGames {
-		s.ChangeState(StateGamesUpdate)
-	}
 }
 
 func (s *Scheduler) processDropClaim(ctx context.Context, message dropEventMessage) error {
@@ -309,35 +300,32 @@ func (s *Scheduler) readyDrops(now time.Time) []claimCandidate {
 }
 
 func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dropID string, currentMinutes int) bool {
-	return s.applyDropProgressResult(now, channel, dropID, currentMinutes).Updated
-}
-
-func (s *Scheduler) applyDropProgressResult(now time.Time, channel *domain.Channel, dropID string, currentMinutes int) progressApplyResult {
 	if channel == nil || strings.TrimSpace(dropID) == "" {
-		return progressApplyResult{}
+		return false
 	}
 
+	campaignID, expiresAt, ok := s.observeDropProgress(now, channel, dropID, currentMinutes)
+	if !ok {
+		return false
+	}
+	s.recordObservedMinutes(campaignID, dropID, currentMinutes, expiresAt, now)
+	return true
+}
+
+func (s *Scheduler) observeDropProgress(now time.Time, channel *domain.Channel, dropID string, currentMinutes int) (string, time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	drop := s.snapshot.Drops[dropID]
-	if drop == nil || !drop.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false) {
-		return progressApplyResult{}
+	if drop == nil || drop.Campaign == nil || !drop.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false) {
+		return "", time.Time{}, false
 	}
 
-	drop.UpdateMinutes(currentMinutes)
 	campaign := drop.Campaign
-	recomputeGames := false
-	if campaign != nil {
-		recomputeGames = campaign.NormalizeSpecialEventMilestones()
-	}
-	overviewDrop := drop
-	if !drop.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false) && campaign != nil {
-		overviewDrop = campaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false)
-	}
-	s.logDropOverviewLocked(campaign, overviewDrop)
+	campaign.ObserveMinutes(drop, currentMinutes)
+	s.logDropOverviewLocked(campaign, campaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 	s.lastProgressAt = now.UTC()
-	return progressApplyResult{Updated: true, RecomputeGames: recomputeGames}
+	return campaign.ID, drop.EndsAt, true
 }
 
 func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (bool, bool, bool) {

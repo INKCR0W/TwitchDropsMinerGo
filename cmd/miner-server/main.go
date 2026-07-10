@@ -20,6 +20,7 @@ import (
 	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/inventory"
 	"twitchdropsminergo/internal/logging"
+	"twitchdropsminergo/internal/progress"
 	"twitchdropsminergo/internal/pubsub"
 	"twitchdropsminergo/internal/rewards"
 	"twitchdropsminergo/internal/runtime"
@@ -164,6 +165,11 @@ func run(args []string) int {
 		return failRun(application, logger, "初始化 reward 进度存储失败", err)
 	}
 
+	watchProgress, err := progress.NewFileStore(layout.ProgressFile)
+	if err != nil {
+		return failRun(application, logger, "初始化观看进度存储失败", err)
+	}
+
 	refresher, err := inventory.NewRefresher(inventory.Options{
 		GQLClient:      gqlClient,
 		AuthState:      authState,
@@ -204,6 +210,7 @@ func run(args []string) int {
 		GQLClient:      gqlClient,
 		AuthState:      authState,
 		RewardProgress: rewardProgress,
+		WatchProgress:  watchProgress,
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化调度器失败", err)

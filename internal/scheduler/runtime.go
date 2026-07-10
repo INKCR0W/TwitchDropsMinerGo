@@ -99,6 +99,7 @@ func New(options Options) (*Scheduler, error) {
 		gqlClient:         options.GQLClient,
 		authState:         options.AuthState,
 		rewardProgress:    options.RewardProgress,
+		watchProgress:     options.WatchProgress,
 		now:               now,
 		sleep:             sleep,
 		watchInterval:     watchInterval,

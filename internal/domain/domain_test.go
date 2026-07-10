@@ -30,10 +30,9 @@ func TestGameIsSpecialCoversEverySpecialCategory(t *testing.T) {
 		want bool
 	}{
 		{name: "special events", game: Game{ID: SpecialEventsGameID, Name: "Special Events"}, want: true},
-		{name: "special events by name", game: Game{Name: "Special Events"}, want: true},
-		{name: "special events by slug", game: Game{SlugText: "special-events"}, want: true},
 		{name: "irl", game: Game{ID: IRLGameID, Name: "IRL"}, want: true},
 		{name: "regular game", game: Game{ID: 460630, Name: "Tom Clancy's Rainbow Six Siege"}, want: false},
+		{name: "impostor by name only", game: Game{Name: "Special Events"}, want: false},
 	}
 	for _, testCase := range cases {
 		if got := testCase.game.IsSpecial(); got != testCase.want {
@@ -132,296 +131,130 @@ func TestNewCampaignNormalizesClaimedDropAndRejectsDuplicateID(t *testing.T) {
 	}
 }
 
-func TestNewCampaignInfersAutoClaimedSpecialEventMilestones(t *testing.T) {
-	t.Parallel()
+func cumulativeCounterCampaign(t *testing.T, now time.Time) *DropsCampaign {
+	t.Helper()
 
-	now := testTime()
-	campaign := mustCampaign(t, CampaignSpec{
-		ID:       "campaign-badge-milestone",
-		Name:     "badge-milestone",
+	return mustCampaign(t, CampaignSpec{
+		ID:       "campaign-ewc",
+		Name:     "EWC 2026",
 		Game:     Game{ID: SpecialEventsGameID, Name: "Special Events"},
 		Linked:   true,
 		Status:   "ACTIVE",
 		StartsAt: now.Add(-time.Hour),
 		EndsAt:   now.Add(24 * time.Hour),
 		Drops: []TimedDropSpec{
-			{
-				ID:              "bronze",
-				Name:            "Bronze",
-				StartsAt:        now.Add(-time.Hour),
-				EndsAt:          now.Add(24 * time.Hour),
-				RequiredMinutes: 60,
-				Benefits: []Benefit{
-					{ID: "bronze-benefit", Name: "Bronze", Type: BenefitTypeBadge},
-				},
-			},
-			{
-				ID:              "platinum",
-				Name:            "Platinum",
-				StartsAt:        now.Add(-time.Hour),
-				EndsAt:          now.Add(24 * time.Hour),
-				RequiredMinutes: 360,
-				Benefits: []Benefit{
-					{ID: "platinum-benefit", Name: "Platinum", Type: BenefitTypeBadge},
-				},
-			},
-			{
-				ID:                 "diamond",
-				Name:               "Diamond Reward Group",
-				StartsAt:           now.Add(-time.Hour),
-				EndsAt:             now.Add(24 * time.Hour),
-				RequiredMinutes:    720,
-				RealCurrentMinutes: 720,
-				Benefits: []Benefit{
-					{ID: "diamond-benefit", Name: "Diamond", Type: BenefitTypeDirectEntitlement},
-				},
-			},
+			{ID: "ultraviolet", Name: "EWC UltraViolet", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(24 * time.Hour), RequiredMinutes: 0,
+				Benefits: []Benefit{{ID: "uv", Name: "UltraViolet", Type: BenefitTypeBadge}}},
+			{ID: "bronze", Name: "EWC Bronze", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(24 * time.Hour), RequiredMinutes: 60,
+				Benefits: []Benefit{{ID: "bronze", Name: "Bronze", Type: BenefitTypeBadge}}},
+			{ID: "silver", Name: "EWC Silver", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(24 * time.Hour), RequiredMinutes: 120,
+				Benefits: []Benefit{{ID: "silver", Name: "Silver", Type: BenefitTypeBadge}}},
+			{ID: "diamond", Name: "EWC 2026 (Diamond) Reward Group", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(24 * time.Hour), RequiredMinutes: 720,
+				Benefits: []Benefit{{ID: "diamond", Name: "Diamond", Type: BenefitTypeBadge}}},
 		},
 	})
+}
 
-	for _, dropID := range []string{"bronze", "platinum", "diamond"} {
+func TestObserveMinutesSpreadsAcrossSharedCounterAndStopsCampaign(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	campaign := cumulativeCounterCampaign(t, now)
+	channel := &Channel{ID: 1, Login: "ch", Stream: &Stream{BroadcastID: 1, Game: &campaign.Game, DropsEnabled: true}}
+
+	if !campaign.ObserveMinutes(campaign.Drop("diamond"), 1006) {
+		t.Fatal("首次写入服务器进度应返回 true")
+	}
+
+	for dropID, want := range map[string]int{"bronze": 60, "silver": 120, "diamond": 720} {
 		drop := campaign.Drop(dropID)
-		if drop == nil || !drop.IsClaimed {
-			t.Fatalf("已达到观看里程碑的 Special Events drop 应被视为 claimed: %s %#v", dropID, drop)
+		if drop.RealCurrentMinutes != want {
+			t.Fatalf("%s 应被 clamp 到自己的阈值: real=%d want=%d", dropID, drop.RealCurrentMinutes, want)
 		}
-		if drop.CurrentMinutes() != drop.RequiredMinutes {
-			t.Fatalf("自动领取的 Special Events drop 应归一化为满进度: %s current=%d required=%d", dropID, drop.CurrentMinutes(), drop.RequiredMinutes)
+		if drop.IsClaimed {
+			t.Fatalf("%s 不应被伪造成已认领", dropID)
 		}
+		if drop.CanEarn(now, channel, true, false) {
+			t.Fatalf("%s 已满进度, 不应继续可推进", dropID)
+		}
+	}
+	if campaign.Drop("ultraviolet").RealCurrentMinutes != 0 {
+		t.Fatal("无观看阈值的 drop 不参与共享计数")
+	}
+	if campaign.CanEarn(now, channel, true, false) || campaign.CanEarnWithin(now, now.Add(time.Hour), true) {
+		t.Fatal("所有档位满进度后活动不应继续可推进")
 	}
 }
 
-func TestNewCampaignInfersSpecialEventMilestonesByName(t *testing.T) {
+func TestObserveMinutesKeepsLowerTiersMineableUntilReached(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	campaign := cumulativeCounterCampaign(t, now)
+	channel := &Channel{ID: 1, Login: "ch", Stream: &Stream{BroadcastID: 1, Game: &campaign.Game, DropsEnabled: true}}
+
+	campaign.ObserveMinutes(campaign.Drop("diamond"), 90)
+
+	if campaign.Drop("bronze").CanEarn(now, channel, true, false) {
+		t.Fatal("bronze 已满 60 分钟, 不应继续可推进")
+	}
+	if !campaign.Drop("silver").CanEarn(now, channel, true, false) {
+		t.Fatal("silver 还差 30 分钟, 应继续可推进")
+	}
+	if first := campaign.FirstEarnableDrop(now, channel, true, false); first == nil || first.ID != "silver" {
+		t.Fatalf("下一个目标应是 silver: %#v", first)
+	}
+}
+
+func TestObserveMinutesNeverRegresses(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	campaign := cumulativeCounterCampaign(t, now)
+	diamond := campaign.Drop("diamond")
+
+	campaign.ObserveMinutes(diamond, 300)
+	if campaign.ObserveMinutes(diamond, 0) {
+		t.Fatal("回退的分钟数不应被接受")
+	}
+	if diamond.RealCurrentMinutes != 300 {
+		t.Fatalf("回退不应改写已有进度: %d", diamond.RealCurrentMinutes)
+	}
+	if campaign.Drop("bronze").RealCurrentMinutes != 60 {
+		t.Fatal("回退不应改写同组其它 drop 的进度")
+	}
+}
+
+func TestObserveMinutesSkipsOtherWindowsPreconditionsAndClaimed(t *testing.T) {
 	t.Parallel()
 
 	now := testTime()
 	campaign := mustCampaign(t, CampaignSpec{
-		ID:       "campaign-special-events-name",
-		Name:     "special-events-name",
-		Game:     Game{Name: "Special Events"},
-		Linked:   true,
-		Status:   "ACTIVE",
-		StartsAt: now.Add(-time.Hour),
-		EndsAt:   now.Add(24 * time.Hour),
+		ID: "campaign-windows", Name: "windows", Game: Game{ID: 1, Name: "Game"},
+		Linked: true, Status: "ACTIVE", StartsAt: now.Add(-48 * time.Hour), EndsAt: now.Add(48 * time.Hour),
 		Drops: []TimedDropSpec{
-			{
-				ID:              "bronze",
-				Name:            "Bronze",
-				StartsAt:        now.Add(-time.Hour),
-				EndsAt:          now.Add(24 * time.Hour),
-				RequiredMinutes: 60,
-				Benefits: []Benefit{
-					{ID: "bronze-benefit", Name: "Bronze", Type: BenefitTypeBadge},
-				},
-			},
-			{
-				ID:                 "diamond",
-				Name:               "Diamond Reward Group",
-				StartsAt:           now.Add(-time.Hour),
-				EndsAt:             now.Add(24 * time.Hour),
-				RequiredMinutes:    720,
-				RealCurrentMinutes: 720,
-				Benefits: []Benefit{
-					{ID: "diamond-benefit", Name: "Diamond", Type: BenefitTypeDirectEntitlement},
-				},
-			},
+			{ID: "week1", Name: "week1", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), RequiredMinutes: 60,
+				Benefits: []Benefit{{ID: "w1", Name: "w1", Type: BenefitTypeBadge}}},
+			{ID: "week2", Name: "week2", StartsAt: now.Add(24 * time.Hour), EndsAt: now.Add(48 * time.Hour), RequiredMinutes: 60,
+				Benefits: []Benefit{{ID: "w2", Name: "w2", Type: BenefitTypeBadge}}},
+			{ID: "tier1", Name: "tier1", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), RequiredMinutes: 30, IsClaimed: true,
+				Benefits: []Benefit{{ID: "t1", Name: "t1", Type: BenefitTypeBadge}}},
+			{ID: "tier2", Name: "tier2", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), RequiredMinutes: 30,
+				PreconditionDropIDs: []string{"tier1"},
+				Benefits:            []Benefit{{ID: "t2", Name: "t2", Type: BenefitTypeBadge}}},
 		},
 	})
 
-	for _, dropID := range []string{"bronze", "diamond"} {
-		if drop := campaign.Drop(dropID); drop == nil || !drop.IsClaimed {
-			t.Fatalf("Special Events name fallback 应触发累计里程碑归一化: %s %#v", dropID, drop)
-		}
+	campaign.ObserveMinutes(campaign.Drop("week1"), 999)
+
+	if got := campaign.Drop("week2").RealCurrentMinutes; got != 0 {
+		t.Fatalf("另一时间窗有独立计数, 不应被写入: %d", got)
 	}
-}
-
-func TestNewCampaignDoesNotInferAutoClaimAcrossPreconditionChain(t *testing.T) {
-	t.Parallel()
-
-	now := testTime()
-	campaign := mustCampaign(t, CampaignSpec{
-		ID:       "campaign-badge-chain",
-		Name:     "badge-chain",
-		Game:     Game{ID: SpecialEventsGameID, Name: "Special Events"},
-		Linked:   true,
-		Status:   "ACTIVE",
-		StartsAt: now.Add(-time.Hour),
-		EndsAt:   now.Add(24 * time.Hour),
-		Drops: []TimedDropSpec{
-			{
-				ID:              "tier-1",
-				Name:            "Tier 1",
-				StartsAt:        now.Add(-time.Hour),
-				EndsAt:          now.Add(24 * time.Hour),
-				RequiredMinutes: 60,
-				IsClaimed:       true,
-				Benefits: []Benefit{
-					{ID: "tier-1-benefit", Name: "Tier 1", Type: BenefitTypeEmote},
-				},
-			},
-			{
-				ID:                  "tier-2",
-				Name:                "Tier 2",
-				StartsAt:            now.Add(-time.Hour),
-				EndsAt:              now.Add(24 * time.Hour),
-				RequiredMinutes:     60,
-				PreconditionDropIDs: []string{"tier-1"},
-				Benefits: []Benefit{
-					{ID: "tier-2-benefit", Name: "Tier 2", Type: BenefitTypeEmote},
-				},
-			},
-		},
-	})
-
-	tier2 := campaign.Drop("tier-2")
-	if tier2.IsClaimed {
-		t.Fatal("前置链上 RequiredMinutes 是相对量，不应被前置 drop 的观看时长推断为 claimed")
+	if got := campaign.Drop("tier2").RealCurrentMinutes; got != 0 {
+		t.Fatalf("带前置链的 drop 有独立计数, 不应被写入: %d", got)
 	}
-	if campaign.Finished() {
-		t.Fatal("仍有未领取 drop 的活动不应被视为已完成")
-	}
-}
-
-func TestNewCampaignDoesNotInferAutoClaimAcrossDropWindows(t *testing.T) {
-	t.Parallel()
-
-	now := testTime()
-	campaign := mustCampaign(t, CampaignSpec{
-		ID:       "campaign-badge-windows",
-		Name:     "badge-windows",
-		Game:     Game{ID: SpecialEventsGameID, Name: "Special Events"},
-		Linked:   true,
-		Status:   "ACTIVE",
-		StartsAt: now.Add(-48 * time.Hour),
-		EndsAt:   now.Add(48 * time.Hour),
-		Drops: []TimedDropSpec{
-			{
-				ID:              "week-1",
-				Name:            "Week 1",
-				StartsAt:        now.Add(-48 * time.Hour),
-				EndsAt:          now.Add(-24 * time.Hour),
-				RequiredMinutes: 60,
-				IsClaimed:       true,
-				Benefits: []Benefit{
-					{ID: "week-1-benefit", Name: "Week 1", Type: BenefitTypeBadge},
-				},
-			},
-			{
-				ID:              "week-2",
-				Name:            "Week 2",
-				StartsAt:        now.Add(-time.Minute),
-				EndsAt:          now.Add(48 * time.Hour),
-				RequiredMinutes: 60,
-				Benefits: []Benefit{
-					{ID: "week-2-benefit", Name: "Week 2", Type: BenefitTypeBadge},
-				},
-			},
-		},
-	})
-
-	week2 := campaign.Drop("week-2")
-	if week2.IsClaimed {
-		t.Fatal("另一个时间窗的 drop 有独立计数，不应被上一窗口的观看时长推断为 claimed")
-	}
-
-	channel := &Channel{
-		ID:    701,
-		Login: "channel",
-		Stream: &Stream{
-			BroadcastID:  801,
-			Game:         &Game{ID: SpecialEventsGameID, Name: "Special Events"},
-			DropsEnabled: true,
-		},
-	}
-	if !campaign.CanEarn(now, channel, true, false) {
-		t.Fatal("当前窗口的 drop 仍需观看，活动应保持可推进")
-	}
-}
-
-func TestNewCampaignIgnoresEstimatedMinutesWhenInferringAutoClaim(t *testing.T) {
-	t.Parallel()
-
-	now := testTime()
-	campaign := mustCampaign(t, CampaignSpec{
-		ID:       "campaign-badge-estimated",
-		Name:     "badge-estimated",
-		Game:     Game{ID: SpecialEventsGameID, Name: "Special Events"},
-		Linked:   true,
-		Status:   "ACTIVE",
-		StartsAt: now.Add(-time.Hour),
-		EndsAt:   now.Add(24 * time.Hour),
-		Drops: []TimedDropSpec{
-			{
-				ID:                  "bronze",
-				Name:                "Bronze",
-				StartsAt:            now.Add(-time.Hour),
-				EndsAt:              now.Add(24 * time.Hour),
-				RequiredMinutes:     60,
-				RealCurrentMinutes:  50,
-				ExtraCurrentMinutes: 10,
-				Benefits: []Benefit{
-					{ID: "bronze-benefit", Name: "Bronze", Type: BenefitTypeBadge},
-				},
-			},
-		},
-	})
-
-	bronze := campaign.Drop("bronze")
-	if bronze.IsClaimed {
-		t.Fatal("本地估算分钟不是服务器事实，不足以推断 drop 已自动领取")
-	}
-	if bronze.RealCurrentMinutes != 50 {
-		t.Fatalf("推断失败时不应改写真实观看时长: %d", bronze.RealCurrentMinutes)
-	}
-}
-
-func TestNewCampaignSkipsAutoClaimInferenceForNonSpecialEventsGames(t *testing.T) {
-	t.Parallel()
-
-	now := testTime()
-	cases := []struct {
-		name string
-		game Game
-	}{
-		{name: "normal game", game: Game{ID: 77, Name: "Normal Game"}},
-		{name: "irl", game: Game{ID: IRLGameID, Name: "IRL"}},
-	}
-	for _, testCase := range cases {
-		campaign := mustCampaign(t, CampaignSpec{
-			ID:       "campaign-badge-" + testCase.name,
-			Name:     "badge-" + testCase.name,
-			Game:     testCase.game,
-			Linked:   true,
-			Status:   "ACTIVE",
-			StartsAt: now.Add(-time.Hour),
-			EndsAt:   now.Add(24 * time.Hour),
-			Drops: []TimedDropSpec{
-				{
-					ID:              "low",
-					Name:            "Low",
-					StartsAt:        now.Add(-time.Hour),
-					EndsAt:          now.Add(24 * time.Hour),
-					RequiredMinutes: 60,
-					Benefits: []Benefit{
-						{ID: "low-benefit", Name: "Low", Type: BenefitTypeBadge},
-					},
-				},
-				{
-					ID:                 "high",
-					Name:               "High",
-					StartsAt:           now.Add(-time.Hour),
-					EndsAt:             now.Add(24 * time.Hour),
-					RequiredMinutes:    120,
-					RealCurrentMinutes: 120,
-					Benefits: []Benefit{
-						{ID: "high-benefit", Name: "High", Type: BenefitTypeBadge},
-					},
-				},
-			},
-		})
-
-		if campaign.Drop("low").IsClaimed {
-			t.Fatalf("累计里程碑推断只适用于 Special Events，%s 活动不应改写 claim 状态", testCase.name)
-		}
+	if got := campaign.Drop("week1").RealCurrentMinutes; got != 60 {
+		t.Fatalf("同窗口 drop 应 clamp 到自己的阈值: %d", got)
 	}
 }
 
@@ -1020,17 +853,17 @@ func TestTimedDropMutationHelpers(t *testing.T) {
 		},
 	}
 
-	if !drop.UpdateMinutes(7) {
-		t.Fatal("更新分钟应返回 true")
+	if !campaign.ObserveMinutes(drop, 7) {
+		t.Fatal("写入服务器进度应返回 true")
 	}
 	if drop.RealCurrentMinutes != 7 || drop.ExtraCurrentMinutes != 0 {
-		t.Fatalf("更新分钟后状态不匹配: real=%d extra=%d", drop.RealCurrentMinutes, drop.ExtraCurrentMinutes)
+		t.Fatalf("写入进度后状态不匹配: real=%d extra=%d", drop.RealCurrentMinutes, drop.ExtraCurrentMinutes)
 	}
-	if !campaign.UpdateMinutes(now, channel, false, false, 9) {
-		t.Fatal("活动更新分钟应返回 true")
+	if !campaign.ObserveMinutes(drop, 9) {
+		t.Fatal("提高服务器进度应返回 true")
 	}
 	if drop.RealCurrentMinutes != 9 {
-		t.Fatalf("活动更新分钟未生效: %d", drop.RealCurrentMinutes)
+		t.Fatalf("提高进度未生效: %d", drop.RealCurrentMinutes)
 	}
 	if reached := campaign.BumpMinutes(now, channel, false, false); reached {
 		t.Fatal("首次补分钟不应达到上限")

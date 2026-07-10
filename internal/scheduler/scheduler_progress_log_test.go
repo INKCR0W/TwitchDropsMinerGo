@@ -131,10 +131,14 @@ func TestApplyDropProgressLogsNewOverviewWhenDropChanges(t *testing.T) {
 	channel := progressLogChannel(9, game)
 
 	scheduler.applyDropProgress(now, &channel, "drop-a", 12)
-	scheduler.applyDropProgress(now, &channel, "drop-b", 5)
+	scheduler.applyDropProgress(now, &channel, "drop-a", 30)
 
-	if got := strings.Count(logs.String(), "开始挂新掉落"); got != 2 {
-		t.Fatalf("切换 drop 应各记一条概览, 实际 %d:\n%s", got, logs.String())
+	output := logs.String()
+	if got := strings.Count(output, "开始挂新掉落"); got != 2 {
+		t.Fatalf("跨过一个档位应各记一条概览, 实际 %d:\n%s", got, output)
+	}
+	if !strings.Contains(output, "drop=Facemask") || !strings.Contains(output, "drop=Door") {
+		t.Fatalf("应先后宣布 Facemask 与 Door:\n%s", output)
 	}
 }
 
@@ -169,7 +173,8 @@ func multiDropCampaign(t *testing.T, now time.Time, game domain.Game) *domain.Dr
 	})
 }
 
-func TestApplyDropProgressAnnouncesEachDropOnceDespiteInterleaving(t *testing.T) {
+// 同一活动的 drop 共享计数, dropCurrentSession 报哪个 drop 都应只宣布最近的未达档位
+func TestApplyDropProgressAnnouncesNearestTierRegardlessOfReportedDrop(t *testing.T) {
 	t.Parallel()
 
 	now := testTime()
@@ -180,14 +185,19 @@ func TestApplyDropProgressAnnouncesEachDropOnceDespiteInterleaving(t *testing.T)
 	scheduler := newProgressLogScheduler(t, logs, campaign, game)
 	channel := progressLogChannel(9, game)
 
-	scheduler.applyDropProgress(now, &channel, "drop-a", 1)
 	scheduler.applyDropProgress(now, &channel, "drop-b", 1)
 	scheduler.applyDropProgress(now, &channel, "drop-a", 2)
-	scheduler.applyDropProgress(now, &channel, "drop-b", 2)
-	scheduler.applyDropProgress(now, &channel, "drop-a", 3)
+	scheduler.applyDropProgress(now, &channel, "drop-b", 3)
 
-	if got := strings.Count(logs.String(), "开始挂新掉落"); got != 2 {
-		t.Fatalf("交替累进时每个 drop 只应宣布一次, 实际 %d:\n%s", got, logs.String())
+	output := logs.String()
+	if got := strings.Count(output, "开始挂新掉落"); got != 1 {
+		t.Fatalf("同一档位只应宣布一次, 实际 %d:\n%s", got, output)
+	}
+	if !strings.Contains(output, "drop=Facemask") {
+		t.Fatalf("应宣布最近的未达档位 Facemask:\n%s", output)
+	}
+	if got := campaign.Drop("drop-b").RealCurrentMinutes; got != 3 {
+		t.Fatalf("共享计数应同步到同窗口的其它 drop: %d", got)
 	}
 }
 
@@ -303,74 +313,5 @@ func TestBumpActiveCampaignLogsOverviewOnly(t *testing.T) {
 	}
 	if strings.Contains(output, "挂机进度") {
 		t.Fatalf("本地兜底不应再打每分钟挂机进度:\n%s", output)
-	}
-}
-
-func TestApplyDropProgressNormalizesFullSpecialEventRewardGroup(t *testing.T) {
-	t.Parallel()
-
-	now := testTime()
-	game := domain.Game{Name: "Special Events"}
-	campaign := mustCampaign(t, domain.CampaignSpec{
-		ID:       "campaign-ewc",
-		Name:     "EWC 2026",
-		Game:     game,
-		Linked:   true,
-		Status:   "ACTIVE",
-		StartsAt: now.Add(-time.Hour),
-		EndsAt:   now.Add(24 * time.Hour),
-		Drops: []domain.TimedDropSpec{
-			{
-				ID:              "bronze",
-				Name:            "EWC Bronze",
-				StartsAt:        now.Add(-time.Hour),
-				EndsAt:          now.Add(24 * time.Hour),
-				RequiredMinutes: 60,
-				Benefits: []domain.Benefit{
-					{ID: "bronze-benefit", Name: "Bronze", Type: domain.BenefitTypeBadge},
-				},
-			},
-			{
-				ID:              "platinum",
-				Name:            "EWC Platinum",
-				StartsAt:        now.Add(-time.Hour),
-				EndsAt:          now.Add(24 * time.Hour),
-				RequiredMinutes: 360,
-				Benefits: []domain.Benefit{
-					{ID: "platinum-benefit", Name: "Platinum", Type: domain.BenefitTypeBadge},
-				},
-			},
-			{
-				ID:              "diamond",
-				Name:            "EWC 2026 (Diamond) Reward Group",
-				StartsAt:        now.Add(-time.Hour),
-				EndsAt:          now.Add(24 * time.Hour),
-				RequiredMinutes: 720,
-				Benefits: []domain.Benefit{
-					{ID: "diamond-benefit", Name: "Diamond", Type: domain.BenefitTypeDirectEntitlement},
-				},
-			},
-		},
-	})
-
-	logs := &logBuffer{}
-	scheduler := newProgressLogScheduler(t, logs, campaign, game)
-	scheduler.settings.EnableBadgesEmotes = true
-	channel := progressLogChannel(9, game)
-
-	if !scheduler.applyDropProgress(now, &channel, "diamond", 720) {
-		t.Fatal("CurrentDrop 返回满进度 reward group 时应接受权威进度")
-	}
-
-	for _, dropID := range []string{"bronze", "platinum", "diamond"} {
-		if drop := campaign.Drop(dropID); drop == nil || !drop.IsClaimed {
-			t.Fatalf("满进度 reward group 应收口同窗口 Special Events 里程碑: %s %#v", dropID, drop)
-		}
-	}
-	if campaign.CanEarn(now, &channel, true, false) {
-		t.Fatal("Special Events 里程碑收口后活动不应继续可推进")
-	}
-	if strings.Contains(logs.String(), "开始挂新掉落") {
-		t.Fatalf("满进度 reward group 不应再宣布为新掉落:\n%s", logs.String())
 	}
 }

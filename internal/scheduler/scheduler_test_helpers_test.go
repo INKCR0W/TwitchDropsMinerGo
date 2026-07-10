@@ -27,6 +27,7 @@ type testSchedulerOptions struct {
 	gqlClient         GQLClient
 	authState         AuthState
 	rewardProgress    RewardProgressStore
+	watchProgress     WatchProgressStore
 	now               func() time.Time
 	sleep             func(context.Context, time.Duration) error
 	watchInterval     time.Duration
@@ -79,6 +80,7 @@ func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
 		GQLClient:         gqlClient,
 		AuthState:         authState,
 		RewardProgress:    options.rewardProgress,
+		WatchProgress:     options.watchProgress,
 		Clock:             now,
 		Sleep:             options.sleep,
 		WatchInterval:     options.watchInterval,

@@ -105,7 +105,6 @@ func NewCampaign(spec CampaignSpec) (*DropsCampaign, error) {
 	if err := campaign.validatePreconditions(); err != nil {
 		return nil, err
 	}
-	campaign.NormalizeSpecialEventMilestones()
 	return campaign, nil
 }
 
@@ -155,48 +154,18 @@ func (c *DropsCampaign) validatePreconditions() error {
 	return nil
 }
 
-// Special Events 的里程碑共享同一个累计观看计数, 低档位达标后由 Twitch 自动发放,
-// inventory 不再回报它们的 self 字段。真实进度可能挂在 "Reward Group" drop 上, 所以同窗口、
-// 无前置条件的里程碑都可作为服务器真实观看时长佐证; 但仅对 Special Events 活动启用,
-// 避免误伤普通游戏、分期开窗或带前置链的 drop。
-func (c *DropsCampaign) NormalizeSpecialEventMilestones() bool {
-	if c == nil || !c.Game.IsSpecialEvents() {
+func (c *DropsCampaign) ObserveMinutes(source *TimedDrop, minutes int) bool {
+	if c == nil || source == nil {
 		return false
 	}
 
-	drops := c.Drops()
-	autoClaimed := make([]*TimedDrop, 0, len(drops))
-	for _, drop := range drops {
-		if !drop.cumulativeMilestoneCandidate() || drop.IsClaimed || drop.ClaimID != "" {
-			continue
-		}
-		if maxRealMinutesInWindow(drops, drop) >= drop.RequiredMinutes {
-			autoClaimed = append(autoClaimed, drop)
-		}
-	}
-
-	updated := false
-	for _, drop := range autoClaimed {
-		if drop.MarkClaimed() {
+	updated := source.observeMinutes(minutes)
+	for _, drop := range c.Drops() {
+		if drop != source && drop.sharesCumulativeCounter(source) && drop.observeMinutes(minutes) {
 			updated = true
 		}
 	}
 	return updated
-}
-
-func maxRealMinutesInWindow(drops []*TimedDrop, target *TimedDrop) int {
-	maximum := 0
-	for _, drop := range drops {
-		if !drop.cumulativeMilestoneCandidate() ||
-			!drop.StartsAt.Equal(target.StartsAt) ||
-			!drop.EndsAt.Equal(target.EndsAt) {
-			continue
-		}
-		if drop.RealCurrentMinutes > maximum {
-			maximum = drop.RealCurrentMinutes
-		}
-	}
-	return maximum
 }
 
 func (c *DropsCampaign) Drop(dropID string) *TimedDrop {
@@ -478,23 +447,6 @@ func (c *DropsCampaign) CanRecordRewardCompletion(now time.Time, channel *Channe
 		}
 	}
 	return false
-}
-
-func (c *DropsCampaign) UpdateMinutes(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool, newMinutes int) bool {
-	if c == nil {
-		return false
-	}
-
-	updated := false
-	for _, drop := range c.Drops() {
-		if !drop.CanEarn(now, channel, enableBadgesEmotes, ignoreChannelStatus) {
-			continue
-		}
-		if drop.UpdateMinutes(newMinutes) {
-			updated = true
-		}
-	}
-	return updated
 }
 
 func (c *DropsCampaign) BumpMinutes(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {

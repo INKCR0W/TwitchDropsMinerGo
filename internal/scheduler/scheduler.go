@@ -13,6 +13,7 @@ import (
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/inventory"
+	"twitchdropsminergo/internal/progress"
 	"twitchdropsminergo/internal/pubsub"
 	"twitchdropsminergo/internal/rewards"
 )
@@ -77,6 +78,12 @@ type RewardProgressStore interface {
 	PruneExpired(now time.Time, gracePeriod time.Duration) (int, error)
 }
 
+type WatchProgressStore interface {
+	Snapshot() []progress.Entry
+	Record(campaignID string, dropID string, minutesWatched int, expiresAt time.Time, now time.Time) error
+	PruneExpired(now time.Time) (int, error)
+}
+
 type rewardProgressAwareRefresher interface {
 	UpdateRewardProgress(map[string]rewards.Progress)
 }
@@ -94,6 +101,7 @@ type Options struct {
 	GQLClient         GQLClient
 	AuthState         AuthState
 	RewardProgress    RewardProgressStore
+	WatchProgress     WatchProgressStore
 	Clock             func() time.Time
 	Sleep             func(context.Context, time.Duration) error
 	WatchInterval     time.Duration
@@ -130,6 +138,7 @@ type Scheduler struct {
 	gqlClient         GQLClient
 	authState         AuthState
 	rewardProgress    RewardProgressStore
+	watchProgress     WatchProgressStore
 	now               func() time.Time
 	sleep             func(context.Context, time.Duration) error
 	watchInterval     time.Duration
