@@ -164,6 +164,57 @@ func (s *Scheduler) refreshWhenChannelExhausted(channel domain.Channel) {
 	s.ChangeState(StateInventoryFetch)
 }
 
+func (s *Scheduler) preflightSpecialEventFullProgress(ctx context.Context, channel domain.Channel) bool {
+	game := channel.CurrentGame()
+	if game == nil || !game.IsSpecialEvents() {
+		return false
+	}
+
+	dropID, currentMinutes, ok, err := s.fetchCurrentDrop(ctx, channel.ID)
+	if err != nil {
+		s.logger.Warn("预检查 CurrentDrop 失败，继续切台", "channel_id", channel.ID, "error", err)
+		return false
+	}
+	if !ok {
+		return false
+	}
+
+	now := s.nowUTC()
+	var (
+		campaignName string
+		dropName     string
+		required     int
+		recompute    bool
+	)
+	s.mu.Lock()
+	drop := s.snapshot.Drops[dropID]
+	if drop != nil && drop.Campaign != nil && drop.Campaign.Game.IsSpecialEvents() && drop.RequiredMinutes > 0 && currentMinutes >= drop.RequiredMinutes {
+		if drop.CanEarn(now, &channel, s.settings.EnableBadgesEmotes, false) {
+			drop.UpdateMinutes(currentMinutes)
+			recompute = drop.Campaign.NormalizeSpecialEventMilestones()
+			campaignName = drop.Campaign.Name
+			dropName = drop.Name
+			required = drop.RequiredMinutes
+		}
+	}
+	s.mu.Unlock()
+	if !recompute {
+		return false
+	}
+
+	s.logger.Info(
+		"预检查发现 Special Events 掉落已满进度，重算规划",
+		"channel_id", channel.ID,
+		"channel_login", channel.Login,
+		"campaign", campaignName,
+		"drop", dropName,
+		"current_minutes", currentMinutes,
+		"required_minutes", required,
+	)
+	s.ChangeState(StateGamesUpdate)
+	return true
+}
+
 func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Channel) progressApplyResult {
 	dropID, currentMinutes, ok, err := s.fetchCurrentDrop(ctx, channel.ID)
 	if err != nil {

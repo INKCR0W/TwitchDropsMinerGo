@@ -69,7 +69,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				}
 			}
 		case StateChannelSwitch:
-			s.handleChannelSwitch()
+			s.handleChannelSwitchWithContext(ctx)
 		case StateExit:
 			return nil
 		default:
@@ -442,6 +442,10 @@ func (s *Scheduler) clearRuntimeError() {
 }
 
 func (s *Scheduler) handleChannelSwitch() {
+	s.handleChannelSwitchWithContext(context.Background())
+}
+
+func (s *Scheduler) handleChannelSwitchWithContext(ctx context.Context) {
 	var selected *domain.Channel
 	if channelID := s.selectedChannel(); channelID > 0 {
 		if channel, ok := s.channel(channelID); ok {
@@ -450,6 +454,9 @@ func (s *Scheduler) handleChannelSwitch() {
 	}
 
 	if selected != nil && s.canWatch(*selected) {
+		if s.preflightSpecialEventFullProgress(ctx, *selected) {
+			return
+		}
 		s.watch(selected.ID)
 		return
 	}
@@ -465,6 +472,9 @@ func (s *Scheduler) handleChannelSwitch() {
 	}
 
 	if newWatching != nil {
+		if s.preflightSpecialEventFullProgress(ctx, *newWatching) {
+			return
+		}
 		s.watch(newWatching.ID)
 		return
 	}
