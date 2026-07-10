@@ -2,111 +2,82 @@ package watch
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"twitchdropsminergo/internal/domain"
-	"twitchdropsminergo/internal/gql"
+	"twitchdropsminergo/internal/httpclient"
 )
 
-const watchGQLMutation = "\n mutation SendEvents($input: SendSpadeEventsInput!) " +
-	"{\n sendSpadeEvents(input: $input) {\n statusCode\n}\n}\n"
+// minute-watched 是行为遥测事件, 必须直接打到 spade。Twitch 已不再把 GQL sendSpadeEvents 计入有效观看
+const spadeTrackURL = "https://spade.twitch.tv/track"
 
-type watchEvent struct {
+type spadeEvent struct {
 	Event      string          `json:"event"`
-	Properties watchProperties `json:"properties"`
+	Properties spadeProperties `json:"properties"`
 }
 
-type watchProperties struct {
-	BroadcastID   string `json:"broadcast_id"`
-	ChannelID     string `json:"channel_id"`
-	Channel       string `json:"channel"`
-	ClientTime    string `json:"client_time"`
-	Game          string `json:"game"`
-	GameID        string `json:"game_id"`
-	Hidden        bool   `json:"hidden"`
-	IsLive        bool   `json:"is_live"`
-	Live          bool   `json:"live"`
-	LoggedIn      bool   `json:"logged_in"`
-	MinutesLogged int    `json:"minutes_logged"`
-	Muted         bool   `json:"muted"`
-	UserID        int64  `json:"user_id"`
+type spadeProperties struct {
+	BroadcastID string `json:"broadcast_id"`
+	ChannelID   string `json:"channel_id"`
+	Channel     string `json:"channel"`
+	Hidden      bool   `json:"hidden"`
+	Live        bool   `json:"live"`
+	Location    string `json:"location"`
+	LoggedIn    bool   `json:"logged_in"`
+	Muted       bool   `json:"muted"`
+	Player      string `json:"player"`
+	UserID      int64  `json:"user_id"`
 }
 
-func BuildWatchQuery(channel *domain.Channel, userID int64, now time.Time) (gql.RawQuery, error) {
+func BuildWatchBody(channel *domain.Channel, userID int64) ([]byte, error) {
 	if channel == nil {
-		return gql.RawQuery{}, fmt.Errorf("频道不能为空")
+		return nil, fmt.Errorf("频道不能为空")
 	}
 	if userID <= 0 {
-		return gql.RawQuery{}, fmt.Errorf("watch payload 缺少 user_id")
+		return nil, fmt.Errorf("watch payload 缺少 user_id")
 	}
 	if strings.TrimSpace(channel.Login) == "" {
-		return gql.RawQuery{}, fmt.Errorf("watch payload 缺少 channel login")
+		return nil, fmt.Errorf("watch payload 缺少 channel login")
 	}
 	if channel.ID <= 0 {
-		return gql.RawQuery{}, fmt.Errorf("watch payload 缺少 channel id")
+		return nil, fmt.Errorf("watch payload 缺少 channel id")
 	}
 	if channel.Stream == nil {
-		return gql.RawQuery{}, fmt.Errorf("watch payload 缺少 stream 信息")
+		return nil, fmt.Errorf("watch payload 缺少 stream 信息")
 	}
 	if channel.Stream.BroadcastID <= 0 {
-		return gql.RawQuery{}, fmt.Errorf("watch payload 缺少 broadcast_id")
+		return nil, fmt.Errorf("watch payload 缺少 broadcast_id")
 	}
 
-	gameName := ""
-	gameID := ""
-	if channel.Stream.Game != nil {
-		gameName = channel.Stream.Game.Name
-		gameID = strconv.FormatInt(channel.Stream.Game.ID, 10)
-	}
-
-	payload := []watchEvent{
+	payload := []spadeEvent{
 		{
 			Event: "minute-watched",
-			Properties: watchProperties{
-				BroadcastID:   strconv.FormatInt(channel.Stream.BroadcastID, 10),
-				ChannelID:     strconv.FormatInt(channel.ID, 10),
-				Channel:       channel.Login,
-				ClientTime:    now.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-				Game:          gameName,
-				GameID:        gameID,
-				Hidden:        false,
-				IsLive:        true,
-				Live:          true,
-				LoggedIn:      true,
-				MinutesLogged: 1,
-				Muted:         false,
-				UserID:        userID,
+			Properties: spadeProperties{
+				BroadcastID: strconv.FormatInt(channel.Stream.BroadcastID, 10),
+				ChannelID:   strconv.FormatInt(channel.ID, 10),
+				Channel:     channel.Login,
+				Hidden:      false,
+				Live:        true,
+				Location:    "channel",
+				LoggedIn:    true,
+				Muted:       false,
+				Player:      "site",
+				UserID:      userID,
 			},
 		},
 	}
 
 	body, err := marshalCompactNoEscape(payload)
 	if err != nil {
-		return gql.RawQuery{}, fmt.Errorf("序列化 watch payload 失败: %w", err)
+		return nil, fmt.Errorf("序列化 watch payload 失败: %w", err)
 	}
-
-	compressed, err := gzipBytes(body)
-	if err != nil {
-		return gql.RawQuery{}, err
-	}
-
-	return gql.RawQuery{
-		Query: watchGQLMutation,
-		Variables: map[string]any{
-			"input": map[string]any{
-				"data":       base64.StdEncoding.EncodeToString(compressed),
-				"repository": "twilight",
-				"encoding":   "GZIP_B64",
-			},
-		},
-	}, nil
+	return []byte("data=" + base64.StdEncoding.EncodeToString(body)), nil
 }
 
 func marshalCompactNoEscape(value any) ([]byte, error) {
@@ -118,20 +89,6 @@ func marshalCompactNoEscape(value any) ([]byte, error) {
 	}
 
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-func gzipBytes(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	writer := gzip.NewWriter(&buf)
-	if _, err := writer.Write(data); err != nil {
-		_ = writer.Close()
-		return nil, fmt.Errorf("gzip 压缩 watch payload 失败: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("gzip 关闭失败: %w", err)
-	}
-
-	return buf.Bytes(), nil
 }
 
 func (t *Tracker) SendWatch(ctx context.Context, channelID int64) (bool, error) {
@@ -153,44 +110,29 @@ func (t *Tracker) SendWatch(ctx context.Context, channelID int64) (bool, error) 
 		return false, nil
 	}
 
-	query, err := BuildWatchQuery(&channel, t.authState.Snapshot().UserID, t.now())
+	body, err := BuildWatchBody(&channel, t.authState.Snapshot().UserID)
 	if err != nil {
 		return false, err
 	}
 
-	response, err := t.gqlClient.DoRaw(ctx, query)
+	headers, err := t.watchHeaders(ctx)
+	if err != nil {
+		return false, fmt.Errorf("获取 watch 请求头失败: %w", err)
+	}
+	headers = headers.Clone()
+	if headers == nil {
+		headers = http.Header{}
+	}
+	headers.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+
+	response, err := t.spadeClient.Do(ctx, httpclient.Request{
+		Method:  http.MethodPost,
+		URL:     spadeTrackURL,
+		Headers: headers,
+		Body:    body,
+	})
 	if err != nil {
 		return false, fmt.Errorf("发送 minute-watched 失败: %w", err)
 	}
-
-	code, ok := watchStatusCode(response)
-	return ok && code == 204, nil
-}
-
-func watchStatusCode(response gql.Response) (int, bool) {
-	data, ok := response.Data.(map[string]any)
-	if !ok {
-		return 0, false
-	}
-	events, ok := data["sendSpadeEvents"].(map[string]any)
-	if !ok {
-		return 0, false
-	}
-
-	switch value := events["statusCode"].(type) {
-	case float64:
-		return int(value), true
-	case int:
-		return value, true
-	case int64:
-		return int(value), true
-	case json.Number:
-		parsed, err := value.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(parsed), true
-	default:
-		return 0, false
-	}
+	return response.StatusCode == http.StatusNoContent, nil
 }

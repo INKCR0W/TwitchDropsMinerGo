@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -10,11 +11,13 @@ import (
 	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
+	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/inventory"
 )
 
 type testTrackerOptions struct {
 	gqlClient   GQLClient
+	spadeClient SpadeClient
 	authState   AuthState
 	settings    config.Settings
 	inventory   inventory.Snapshot
@@ -37,6 +40,11 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 		}
 	}
 
+	spadeClient := options.spadeClient
+	if spadeClient == nil {
+		spadeClient = &fakeSpadeClient{}
+	}
+
 	authState := options.authState
 	if authState == nil {
 		authState = &fakeAuthState{
@@ -49,11 +57,13 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 	}
 
 	tracker, err := NewTracker(Options{
-		GQLClient:   gqlClient,
-		AuthState:   authState,
-		OnlineDelay: options.onlineDelay,
-		Clock:       testNow,
-		Sleep:       options.sleep,
+		GQLClient:    gqlClient,
+		SpadeClient:  spadeClient,
+		WatchHeaders: func(context.Context) (http.Header, error) { return http.Header{}, nil },
+		AuthState:    authState,
+		OnlineDelay:  options.onlineDelay,
+		Clock:        testNow,
+		Sleep:        options.sleep,
 	})
 	if err != nil {
 		t.Fatalf("NewTracker 返回错误: %v", err)
@@ -70,7 +80,6 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 
 type fakeGQLClient struct {
 	doFunc      func(context.Context, gql.Operation) (gql.Response, error)
-	doRawFunc   func(context.Context, gql.RawQuery) (gql.Response, error)
 	doBatchFunc func(context.Context, []gql.Operation) ([]gql.Response, error)
 }
 
@@ -81,18 +90,42 @@ func (f *fakeGQLClient) Do(ctx context.Context, operation gql.Operation) (gql.Re
 	return f.doFunc(ctx, operation)
 }
 
-func (f *fakeGQLClient) DoRaw(ctx context.Context, query gql.RawQuery) (gql.Response, error) {
-	if f.doRawFunc == nil {
-		return gql.Response{}, nil
-	}
-	return f.doRawFunc(ctx, query)
-}
-
 func (f *fakeGQLClient) DoBatch(ctx context.Context, operations []gql.Operation) ([]gql.Response, error) {
 	if f.doBatchFunc == nil {
 		return nil, nil
 	}
 	return f.doBatchFunc(ctx, operations)
+}
+
+type fakeSpadeClient struct {
+	mu       sync.Mutex
+	lastReq  httpclient.Request
+	status   int
+	err      error
+	callFunc func(httpclient.Request) (httpclient.Response, error)
+}
+
+func (f *fakeSpadeClient) Do(_ context.Context, request httpclient.Request) (httpclient.Response, error) {
+	f.mu.Lock()
+	f.lastReq = request
+	f.mu.Unlock()
+	if f.callFunc != nil {
+		return f.callFunc(request)
+	}
+	if f.err != nil {
+		return httpclient.Response{}, f.err
+	}
+	status := f.status
+	if status == 0 {
+		status = 204
+	}
+	return httpclient.Response{StatusCode: status}, nil
+}
+
+func (f *fakeSpadeClient) lastRequest() httpclient.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReq
 }
 
 type fakeAuthState struct {

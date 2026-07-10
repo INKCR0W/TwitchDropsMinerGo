@@ -162,7 +162,13 @@ func run(args []string) int {
 	}
 
 	tracker, err := watch.NewTracker(watch.Options{
-		GQLClient: gqlClient,
+		GQLClient:   gqlClient,
+		SpadeClient: httpClient,
+		// spade 复用完整鉴权头(含 OAuth), 与 GQL 请求一致
+		WatchHeaders: authState.HeadersProvider(auth.HeadersOptions{
+			UserAgent: clientInfo.UserAgent,
+			GQL:       true,
+		}),
 		AuthState: authState,
 		Logger:    logger,
 	})

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
+	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/inventory"
 )
 
@@ -27,8 +29,12 @@ var (
 
 type GQLClient interface {
 	Do(context.Context, gql.Operation) (gql.Response, error)
-	DoRaw(context.Context, gql.RawQuery) (gql.Response, error)
 	DoBatch(context.Context, []gql.Operation) ([]gql.Response, error)
+}
+
+// SpadeClient 直接向 spade 端点投递观看事件, 不经过 GQL
+type SpadeClient interface {
+	Do(context.Context, httpclient.Request) (httpclient.Response, error)
 }
 
 type AuthState interface {
@@ -37,23 +43,27 @@ type AuthState interface {
 }
 
 type Options struct {
-	GQLClient   GQLClient
-	AuthState   AuthState
-	OnlineDelay time.Duration
-	BatchSize   int
-	Clock       func() time.Time
-	Sleep       func(context.Context, time.Duration) error
-	Logger      *slog.Logger
+	GQLClient    GQLClient
+	SpadeClient  SpadeClient
+	WatchHeaders func(context.Context) (http.Header, error)
+	AuthState    AuthState
+	OnlineDelay  time.Duration
+	BatchSize    int
+	Clock        func() time.Time
+	Sleep        func(context.Context, time.Duration) error
+	Logger       *slog.Logger
 }
 
 type Tracker struct {
-	gqlClient   GQLClient
-	authState   AuthState
-	logger      *slog.Logger
-	onlineDelay time.Duration
-	batchSize   int
-	now         func() time.Time
-	sleep       func(context.Context, time.Duration) error
+	gqlClient    GQLClient
+	spadeClient  SpadeClient
+	watchHeaders func(context.Context) (http.Header, error)
+	authState    AuthState
+	logger       *slog.Logger
+	onlineDelay  time.Duration
+	batchSize    int
+	now          func() time.Time
+	sleep        func(context.Context, time.Duration) error
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -96,6 +106,12 @@ func NewTracker(options Options) (*Tracker, error) {
 	if options.GQLClient == nil {
 		return nil, fmt.Errorf("watch GQL 客户端不能为空")
 	}
+	if options.SpadeClient == nil {
+		return nil, fmt.Errorf("watch spade 客户端不能为空")
+	}
+	if options.WatchHeaders == nil {
+		return nil, fmt.Errorf("watch 请求头 provider 不能为空")
+	}
 	if options.AuthState == nil {
 		return nil, fmt.Errorf("watch 认证状态不能为空")
 	}
@@ -127,17 +143,19 @@ func NewTracker(options Options) (*Tracker, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Tracker{
-		gqlClient:   options.GQLClient,
-		authState:   options.AuthState,
-		logger:      logger,
-		onlineDelay: onlineDelay,
-		batchSize:   batchSize,
-		now:         now,
-		sleep:       sleep,
-		ctx:         ctx,
-		cancel:      cancel,
-		settings:    config.DefaultSettings(),
-		channels:    make(map[int64]*trackedChannel),
+		gqlClient:    options.GQLClient,
+		spadeClient:  options.SpadeClient,
+		watchHeaders: options.WatchHeaders,
+		authState:    options.AuthState,
+		logger:       logger,
+		onlineDelay:  onlineDelay,
+		batchSize:    batchSize,
+		now:          now,
+		sleep:        sleep,
+		ctx:          ctx,
+		cancel:       cancel,
+		settings:     config.DefaultSettings(),
+		channels:     make(map[int64]*trackedChannel),
 	}, nil
 }
 
