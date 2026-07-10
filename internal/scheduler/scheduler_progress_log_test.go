@@ -305,3 +305,72 @@ func TestBumpActiveCampaignLogsOverviewOnly(t *testing.T) {
 		t.Fatalf("本地兜底不应再打每分钟挂机进度:\n%s", output)
 	}
 }
+
+func TestApplyDropProgressNormalizesFullSpecialEventRewardGroup(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{Name: "Special Events"}
+	campaign := mustCampaign(t, domain.CampaignSpec{
+		ID:       "campaign-ewc",
+		Name:     "EWC 2026",
+		Game:     game,
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(24 * time.Hour),
+		Drops: []domain.TimedDropSpec{
+			{
+				ID:              "bronze",
+				Name:            "EWC Bronze",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 60,
+				Benefits: []domain.Benefit{
+					{ID: "bronze-benefit", Name: "Bronze", Type: domain.BenefitTypeBadge},
+				},
+			},
+			{
+				ID:              "platinum",
+				Name:            "EWC Platinum",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 360,
+				Benefits: []domain.Benefit{
+					{ID: "platinum-benefit", Name: "Platinum", Type: domain.BenefitTypeBadge},
+				},
+			},
+			{
+				ID:              "diamond",
+				Name:            "EWC 2026 (Diamond) Reward Group",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 720,
+				Benefits: []domain.Benefit{
+					{ID: "diamond-benefit", Name: "Diamond", Type: domain.BenefitTypeDirectEntitlement},
+				},
+			},
+		},
+	})
+
+	logs := &logBuffer{}
+	scheduler := newProgressLogScheduler(t, logs, campaign, game)
+	scheduler.settings.EnableBadgesEmotes = true
+	channel := progressLogChannel(9, game)
+
+	if !scheduler.applyDropProgress(now, &channel, "diamond", 720) {
+		t.Fatal("CurrentDrop 返回满进度 reward group 时应接受权威进度")
+	}
+
+	for _, dropID := range []string{"bronze", "platinum", "diamond"} {
+		if drop := campaign.Drop(dropID); drop == nil || !drop.IsClaimed {
+			t.Fatalf("满进度 reward group 应收口同窗口 Special Events 里程碑: %s %#v", dropID, drop)
+		}
+	}
+	if campaign.CanEarn(now, &channel, true, false) {
+		t.Fatal("Special Events 里程碑收口后活动不应继续可推进")
+	}
+	if strings.Contains(logs.String(), "开始挂新掉落") {
+		t.Fatalf("满进度 reward group 不应再宣布为新掉落:\n%s", logs.String())
+	}
+}

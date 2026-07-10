@@ -32,7 +32,17 @@ func (g Game) Slug() string {
 		return slug
 	}
 
-	slug := strings.ToLower(strings.TrimSpace(g.Name))
+	return normalizeGameSlug(g.Name)
+}
+
+func (g Game) IsSpecialEvents() bool {
+	return g.ID == SpecialEventsGameID ||
+		normalizeGameSlug(g.SlugText) == "special-events" ||
+		normalizeGameSlug(g.Name) == "special-events"
+}
+
+func normalizeGameSlug(value string) string {
+	slug := strings.ToLower(strings.TrimSpace(value))
 	slug = gameSlugApostrophePattern.ReplaceAllString(slug, "")
 	slug = gameSlugNonWordPattern.ReplaceAllString(slug, "-")
 	slug = strings.Trim(slug, "-")
@@ -41,6 +51,8 @@ func (g Game) Slug() string {
 }
 
 func (g Game) IsSpecial() bool {
-	_, ok := specialGameIDs[g.ID]
-	return ok
+	if _, ok := specialGameIDs[g.ID]; ok {
+		return true
+	}
+	return g.IsSpecialEvents()
 }

@@ -105,7 +105,7 @@ func NewCampaign(spec CampaignSpec) (*DropsCampaign, error) {
 	if err := campaign.validatePreconditions(); err != nil {
 		return nil, err
 	}
-	campaign.inferAutoClaimedSpecialEventMilestones()
+	campaign.NormalizeSpecialEventMilestones()
 	return campaign, nil
 }
 
@@ -159,9 +159,9 @@ func (c *DropsCampaign) validatePreconditions() error {
 // inventory 不再回报它们的 self 字段。真实进度可能挂在 "Reward Group" drop 上, 所以同窗口、
 // 无前置条件的里程碑都可作为服务器真实观看时长佐证; 但仅对 Special Events 活动启用,
 // 避免误伤普通游戏、分期开窗或带前置链的 drop。
-func (c *DropsCampaign) inferAutoClaimedSpecialEventMilestones() {
-	if c == nil || c.Game.ID != SpecialEventsGameID {
-		return
+func (c *DropsCampaign) NormalizeSpecialEventMilestones() bool {
+	if c == nil || !c.Game.IsSpecialEvents() {
+		return false
 	}
 
 	drops := c.Drops()
@@ -175,9 +175,13 @@ func (c *DropsCampaign) inferAutoClaimedSpecialEventMilestones() {
 		}
 	}
 
+	updated := false
 	for _, drop := range autoClaimed {
-		drop.MarkClaimed()
+		if drop.MarkClaimed() {
+			updated = true
+		}
 	}
+	return updated
 }
 
 func maxRealMinutesInWindow(drops []*TimedDrop, target *TimedDrop) int {

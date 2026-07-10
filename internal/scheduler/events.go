@@ -313,7 +313,15 @@ func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dr
 	}
 
 	drop.UpdateMinutes(currentMinutes)
-	s.logDropOverviewLocked(drop.Campaign, drop)
+	campaign := drop.Campaign
+	if campaign != nil {
+		campaign.NormalizeSpecialEventMilestones()
+	}
+	overviewDrop := drop
+	if !drop.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false) && campaign != nil {
+		overviewDrop = campaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false)
+	}
+	s.logDropOverviewLocked(campaign, overviewDrop)
 	s.lastProgressAt = now.UTC()
 	return true
 }

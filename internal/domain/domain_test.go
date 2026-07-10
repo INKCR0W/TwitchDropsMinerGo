@@ -30,6 +30,8 @@ func TestGameIsSpecialCoversEverySpecialCategory(t *testing.T) {
 		want bool
 	}{
 		{name: "special events", game: Game{ID: SpecialEventsGameID, Name: "Special Events"}, want: true},
+		{name: "special events by name", game: Game{Name: "Special Events"}, want: true},
+		{name: "special events by slug", game: Game{SlugText: "special-events"}, want: true},
 		{name: "irl", game: Game{ID: IRLGameID, Name: "IRL"}, want: true},
 		{name: "regular game", game: Game{ID: 460630, Name: "Tom Clancy's Rainbow Six Siege"}, want: false},
 	}
@@ -184,6 +186,50 @@ func TestNewCampaignInfersAutoClaimedSpecialEventMilestones(t *testing.T) {
 		}
 		if drop.CurrentMinutes() != drop.RequiredMinutes {
 			t.Fatalf("自动领取的 Special Events drop 应归一化为满进度: %s current=%d required=%d", dropID, drop.CurrentMinutes(), drop.RequiredMinutes)
+		}
+	}
+}
+
+func TestNewCampaignInfersSpecialEventMilestonesByName(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	campaign := mustCampaign(t, CampaignSpec{
+		ID:       "campaign-special-events-name",
+		Name:     "special-events-name",
+		Game:     Game{Name: "Special Events"},
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(24 * time.Hour),
+		Drops: []TimedDropSpec{
+			{
+				ID:              "bronze",
+				Name:            "Bronze",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 60,
+				Benefits: []Benefit{
+					{ID: "bronze-benefit", Name: "Bronze", Type: BenefitTypeBadge},
+				},
+			},
+			{
+				ID:                 "diamond",
+				Name:               "Diamond Reward Group",
+				StartsAt:           now.Add(-time.Hour),
+				EndsAt:             now.Add(24 * time.Hour),
+				RequiredMinutes:    720,
+				RealCurrentMinutes: 720,
+				Benefits: []Benefit{
+					{ID: "diamond-benefit", Name: "Diamond", Type: BenefitTypeDirectEntitlement},
+				},
+			},
+		},
+	})
+
+	for _, dropID := range []string{"bronze", "diamond"} {
+		if drop := campaign.Drop(dropID); drop == nil || !drop.IsClaimed {
+			t.Fatalf("Special Events name fallback 应触发累计里程碑归一化: %s %#v", dropID, drop)
 		}
 	}
 }
