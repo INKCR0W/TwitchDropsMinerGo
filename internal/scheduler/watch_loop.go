@@ -118,8 +118,12 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 }
 
 func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel, watchReported bool) {
-	if s.syncProgressFromGQL(ctx, channel) {
-		s.refreshWhenChannelExhausted(channel)
+	if result := s.syncProgressFromGQL(ctx, channel); result.Updated {
+		if result.RecomputeGames {
+			s.ChangeState(StateGamesUpdate)
+		} else {
+			s.refreshWhenChannelExhausted(channel)
+		}
 		return
 	}
 
@@ -160,17 +164,17 @@ func (s *Scheduler) refreshWhenChannelExhausted(channel domain.Channel) {
 	s.ChangeState(StateInventoryFetch)
 }
 
-func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Channel) bool {
+func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Channel) progressApplyResult {
 	dropID, currentMinutes, ok, err := s.fetchCurrentDrop(ctx, channel.ID)
 	if err != nil {
 		s.logger.Warn("查询 CurrentDrop 失败，回退到本地估算", "channel_id", channel.ID, "error", err)
-		return false
+		return progressApplyResult{}
 	}
 	if !ok {
-		return false
+		return progressApplyResult{}
 	}
 
-	return s.applyDropProgress(s.nowUTC(), &channel, dropID, currentMinutes)
+	return s.applyDropProgressResult(s.nowUTC(), &channel, dropID, currentMinutes)
 }
 
 func (s *Scheduler) fetchCurrentDrop(ctx context.Context, channelID int64) (string, int, bool, error) {

@@ -13,6 +13,11 @@ import (
 	"twitchdropsminergo/internal/pubsub"
 )
 
+type progressApplyResult struct {
+	Updated        bool
+	RecomputeGames bool
+}
+
 func (s *Scheduler) handleStreamState(ctx context.Context, event pubsub.Event) error {
 	return s.tracker.ProcessStreamState(ctx, event.Topic.TargetID(), event.Message)
 }
@@ -200,7 +205,8 @@ func (s *Scheduler) processDropProgress(message dropEventMessage) {
 	}
 
 	watchingChannel := s.currentWatchingChannel()
-	if !s.applyDropProgress(s.nowUTC(), watchingChannel, message.Data.DropID, message.Data.CurrentProgressMin) {
+	result := s.applyDropProgressResult(s.nowUTC(), watchingChannel, message.Data.DropID, message.Data.CurrentProgressMin)
+	if !result.Updated {
 		return
 	}
 
@@ -211,6 +217,9 @@ func (s *Scheduler) processDropProgress(message dropEventMessage) {
 	}
 	attrs = append(attrs, s.watchProgressAttrs(message.Data.DropID)...)
 	s.logger.Info("收到掉宝进度更新", attrs...)
+	if result.RecomputeGames {
+		s.ChangeState(StateGamesUpdate)
+	}
 }
 
 func (s *Scheduler) processDropClaim(ctx context.Context, message dropEventMessage) error {
@@ -300,8 +309,12 @@ func (s *Scheduler) readyDrops(now time.Time) []claimCandidate {
 }
 
 func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dropID string, currentMinutes int) bool {
+	return s.applyDropProgressResult(now, channel, dropID, currentMinutes).Updated
+}
+
+func (s *Scheduler) applyDropProgressResult(now time.Time, channel *domain.Channel, dropID string, currentMinutes int) progressApplyResult {
 	if channel == nil || strings.TrimSpace(dropID) == "" {
-		return false
+		return progressApplyResult{}
 	}
 
 	s.mu.Lock()
@@ -309,13 +322,14 @@ func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dr
 
 	drop := s.snapshot.Drops[dropID]
 	if drop == nil || !drop.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false) {
-		return false
+		return progressApplyResult{}
 	}
 
 	drop.UpdateMinutes(currentMinutes)
 	campaign := drop.Campaign
+	recomputeGames := false
 	if campaign != nil {
-		campaign.NormalizeSpecialEventMilestones()
+		recomputeGames = campaign.NormalizeSpecialEventMilestones()
 	}
 	overviewDrop := drop
 	if !drop.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false) && campaign != nil {
@@ -323,7 +337,7 @@ func (s *Scheduler) applyDropProgress(now time.Time, channel *domain.Channel, dr
 	}
 	s.logDropOverviewLocked(campaign, overviewDrop)
 	s.lastProgressAt = now.UTC()
-	return true
+	return progressApplyResult{Updated: true, RecomputeGames: recomputeGames}
 }
 
 func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (bool, bool, bool) {
