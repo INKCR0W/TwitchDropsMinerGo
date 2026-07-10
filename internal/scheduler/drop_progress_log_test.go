@@ -40,7 +40,6 @@ func multiDropCampaign(t *testing.T, now time.Time, game domain.Game) *domain.Dr
 }
 
 // 同一活动的 drop 共享计数, dropCurrentSession 报哪个 drop 都应只宣布最近的未达档位
-
 func TestApplyDropProgressAnnouncesNearestTierRegardlessOfReportedDrop(t *testing.T) {
 	t.Parallel()
 
