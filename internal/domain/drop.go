@@ -267,11 +267,10 @@ func (d *TimedDrop) baseEarnConditions() bool {
 		d.ExtraCurrentMinutes < MaxExtraMinutes
 }
 
-func (d *TimedDrop) autoClaimable() bool {
+func (d *TimedDrop) cumulativeMilestoneCandidate() bool {
 	return d != nil &&
 		d.RequiredMinutes > 0 &&
-		len(d.PreconditionDropIDs) == 0 &&
-		d.hasBadgeOrEmoteBenefit()
+		len(d.PreconditionDropIDs) == 0
 }
 
 func (d *TimedDrop) UpdateMinutes(newMinutes int) bool {

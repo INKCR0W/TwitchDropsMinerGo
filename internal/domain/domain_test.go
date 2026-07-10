@@ -130,7 +130,7 @@ func TestNewCampaignNormalizesClaimedDropAndRejectsDuplicateID(t *testing.T) {
 	}
 }
 
-func TestNewCampaignInfersAutoClaimedBadgeMilestones(t *testing.T) {
+func TestNewCampaignInfersAutoClaimedSpecialEventMilestones(t *testing.T) {
 	t.Parallel()
 
 	now := testTime()
@@ -165,13 +165,13 @@ func TestNewCampaignInfersAutoClaimedBadgeMilestones(t *testing.T) {
 			},
 			{
 				ID:                 "diamond",
-				Name:               "Diamond",
+				Name:               "Diamond Reward Group",
 				StartsAt:           now.Add(-time.Hour),
 				EndsAt:             now.Add(24 * time.Hour),
 				RequiredMinutes:    720,
 				RealCurrentMinutes: 720,
 				Benefits: []Benefit{
-					{ID: "diamond-benefit", Name: "Diamond", Type: BenefitTypeBadge},
+					{ID: "diamond-benefit", Name: "Diamond", Type: BenefitTypeDirectEntitlement},
 				},
 			},
 		},
@@ -180,10 +180,10 @@ func TestNewCampaignInfersAutoClaimedBadgeMilestones(t *testing.T) {
 	for _, dropID := range []string{"bronze", "platinum", "diamond"} {
 		drop := campaign.Drop(dropID)
 		if drop == nil || !drop.IsClaimed {
-			t.Fatalf("已达到观看里程碑的自动领取徽章应被视为 claimed: %s %#v", dropID, drop)
+			t.Fatalf("已达到观看里程碑的 Special Events drop 应被视为 claimed: %s %#v", dropID, drop)
 		}
 		if drop.CurrentMinutes() != drop.RequiredMinutes {
-			t.Fatalf("自动领取徽章应归一化为满进度: %s current=%d required=%d", dropID, drop.CurrentMinutes(), drop.RequiredMinutes)
+			t.Fatalf("自动领取的 Special Events drop 应归一化为满进度: %s current=%d required=%d", dropID, drop.CurrentMinutes(), drop.RequiredMinutes)
 		}
 	}
 }

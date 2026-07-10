@@ -171,7 +171,7 @@ func TestComputeWantedGamesSkipsFullProgressSpecialEventRewardGroup(t *testing.T
 				RequiredMinutes:    720,
 				RealCurrentMinutes: 720,
 				Benefits: []domain.Benefit{
-					{ID: "diamond-benefit", Name: "Diamond", Type: domain.BenefitTypeBadge},
+					{ID: "diamond-benefit", Name: "Diamond", Type: domain.BenefitTypeDirectEntitlement},
 				},
 			},
 		},

@@ -105,7 +105,7 @@ func NewCampaign(spec CampaignSpec) (*DropsCampaign, error) {
 	if err := campaign.validatePreconditions(); err != nil {
 		return nil, err
 	}
-	campaign.inferAutoClaimedBadgeEmoteDrops()
+	campaign.inferAutoClaimedSpecialEventMilestones()
 	return campaign, nil
 }
 
@@ -155,10 +155,11 @@ func (c *DropsCampaign) validatePreconditions() error {
 	return nil
 }
 
-// Special Events 的徽章/表情里程碑共享同一个累计观看计数, 低档位达标后由 Twitch 自动发放,
-// inventory 不再回报它们的 self 字段。仅在同一时间窗、无前置条件、且有服务器真实观看时长佐证时回填,
-// 否则会误伤分期开窗或带前置链的徽章 drop
-func (c *DropsCampaign) inferAutoClaimedBadgeEmoteDrops() {
+// Special Events 的里程碑共享同一个累计观看计数, 低档位达标后由 Twitch 自动发放,
+// inventory 不再回报它们的 self 字段。真实进度可能挂在 "Reward Group" drop 上, 所以同窗口、
+// 无前置条件的里程碑都可作为服务器真实观看时长佐证; 但仅对 Special Events 活动启用,
+// 避免误伤普通游戏、分期开窗或带前置链的 drop。
+func (c *DropsCampaign) inferAutoClaimedSpecialEventMilestones() {
 	if c == nil || c.Game.ID != SpecialEventsGameID {
 		return
 	}
@@ -166,7 +167,7 @@ func (c *DropsCampaign) inferAutoClaimedBadgeEmoteDrops() {
 	drops := c.Drops()
 	autoClaimed := make([]*TimedDrop, 0, len(drops))
 	for _, drop := range drops {
-		if !drop.autoClaimable() || drop.IsClaimed || drop.ClaimID != "" {
+		if !drop.cumulativeMilestoneCandidate() || drop.IsClaimed || drop.ClaimID != "" {
 			continue
 		}
 		if maxRealMinutesInWindow(drops, drop) >= drop.RequiredMinutes {
@@ -182,7 +183,7 @@ func (c *DropsCampaign) inferAutoClaimedBadgeEmoteDrops() {
 func maxRealMinutesInWindow(drops []*TimedDrop, target *TimedDrop) int {
 	maximum := 0
 	for _, drop := range drops {
-		if !drop.autoClaimable() ||
+		if !drop.cumulativeMilestoneCandidate() ||
 			!drop.StartsAt.Equal(target.StartsAt) ||
 			!drop.EndsAt.Equal(target.EndsAt) {
 			continue
