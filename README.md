@@ -61,4 +61,4 @@ TRyXHMLAmXUK6KQbxhTzr2wFtfc1nkCrow
 
 ## 许可证
 
-本项目基于 GNU General Public License v3.0 发布，详见 [LICENSE](LICENSE)。
+本项目基于 MIT 许可证发布，详见 [LICENSE](LICENSE)。
