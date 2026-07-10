@@ -96,6 +96,92 @@ func TestComputeWantedGamesSmartBalanceFiltersCertainlyUnfinishableCampaigns(t *
 	}
 }
 
+func TestComputeWantedGamesSkipsFullProgressSpecialEventRewardGroup(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: domain.SpecialEventsGameID, Name: "Special Events"}
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		settings: config.Settings{
+			PriorityMode:       config.EndingSoonest,
+			EnableBadgesEmotes: true,
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(mustCampaign(t, domain.CampaignSpec{
+		ID:       "campaign-ewc",
+		Name:     "EWC 2026",
+		Game:     game,
+		Linked:   true,
+		Status:   "ACTIVE",
+		StartsAt: now.Add(-time.Hour),
+		EndsAt:   now.Add(24 * time.Hour),
+		Drops: []domain.TimedDropSpec{
+			{
+				ID:              "ultraviolet",
+				Name:            "EWC UltraViolet",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 0,
+			},
+			{
+				ID:              "bronze",
+				Name:            "EWC Bronze",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 60,
+				Benefits: []domain.Benefit{
+					{ID: "bronze-benefit", Name: "Bronze", Type: domain.BenefitTypeBadge},
+				},
+			},
+			{
+				ID:              "silver",
+				Name:            "EWC Silver",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 120,
+				Benefits: []domain.Benefit{
+					{ID: "silver-benefit", Name: "Silver", Type: domain.BenefitTypeBadge},
+				},
+			},
+			{
+				ID:              "gold",
+				Name:            "EWC Gold",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 180,
+				Benefits: []domain.Benefit{
+					{ID: "gold-benefit", Name: "Gold", Type: domain.BenefitTypeBadge},
+				},
+			},
+			{
+				ID:              "platinum",
+				Name:            "EWC Platinum",
+				StartsAt:        now.Add(-time.Hour),
+				EndsAt:          now.Add(24 * time.Hour),
+				RequiredMinutes: 360,
+				Benefits: []domain.Benefit{
+					{ID: "platinum-benefit", Name: "Platinum", Type: domain.BenefitTypeBadge},
+				},
+			},
+			{
+				ID:                 "diamond",
+				Name:               "EWC 2026 (Diamond) Reward Group",
+				StartsAt:           now.Add(-time.Hour),
+				EndsAt:             now.Add(24 * time.Hour),
+				RequiredMinutes:    720,
+				RealCurrentMinutes: 720,
+				Benefits: []domain.Benefit{
+					{ID: "diamond-benefit", Name: "Diamond", Type: domain.BenefitTypeBadge},
+				},
+			},
+		},
+	}))
+
+	if got := scheduler.computeWantedGames(now); len(got) != 0 {
+		t.Fatalf("满进度 reward group 不应继续进入 wanted games: %#v", got)
+	}
+}
+
 func TestComputeWantedGamesSmartBalancePrefersActiveCampaignOverUpcoming(t *testing.T) {
 	t.Parallel()
 

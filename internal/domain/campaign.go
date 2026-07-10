@@ -105,6 +105,7 @@ func NewCampaign(spec CampaignSpec) (*DropsCampaign, error) {
 	if err := campaign.validatePreconditions(); err != nil {
 		return nil, err
 	}
+	campaign.inferAutoClaimedBadgeEmoteDrops()
 	return campaign, nil
 }
 
@@ -152,6 +153,45 @@ func (c *DropsCampaign) validatePreconditions() error {
 		}
 	}
 	return nil
+}
+
+// Special Events 的徽章/表情里程碑共享同一个累计观看计数, 低档位达标后由 Twitch 自动发放,
+// inventory 不再回报它们的 self 字段。仅在同一时间窗、无前置条件、且有服务器真实观看时长佐证时回填,
+// 否则会误伤分期开窗或带前置链的徽章 drop
+func (c *DropsCampaign) inferAutoClaimedBadgeEmoteDrops() {
+	if c == nil || c.Game.ID != SpecialEventsGameID {
+		return
+	}
+
+	drops := c.Drops()
+	autoClaimed := make([]*TimedDrop, 0, len(drops))
+	for _, drop := range drops {
+		if !drop.autoClaimable() || drop.IsClaimed || drop.ClaimID != "" {
+			continue
+		}
+		if maxRealMinutesInWindow(drops, drop) >= drop.RequiredMinutes {
+			autoClaimed = append(autoClaimed, drop)
+		}
+	}
+
+	for _, drop := range autoClaimed {
+		drop.MarkClaimed()
+	}
+}
+
+func maxRealMinutesInWindow(drops []*TimedDrop, target *TimedDrop) int {
+	maximum := 0
+	for _, drop := range drops {
+		if !drop.autoClaimable() ||
+			!drop.StartsAt.Equal(target.StartsAt) ||
+			!drop.EndsAt.Equal(target.EndsAt) {
+			continue
+		}
+		if drop.RealCurrentMinutes > maximum {
+			maximum = drop.RealCurrentMinutes
+		}
+	}
+	return maximum
 }
 
 func (c *DropsCampaign) Drop(dropID string) *TimedDrop {

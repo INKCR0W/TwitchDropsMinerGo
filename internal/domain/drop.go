@@ -104,6 +104,18 @@ func (d *BaseDrop) RewardsText(delimiter string) string {
 	return strings.Join(names, delimiter)
 }
 
+func (d *BaseDrop) hasBadgeOrEmoteBenefit() bool {
+	if d == nil {
+		return false
+	}
+	for _, benefit := range d.Benefits {
+		if benefit.Type.IsBadgeOrEmote() {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *BaseDrop) UpdateClaim(claimID string) {
 	if d == nil {
 		return
@@ -251,7 +263,15 @@ func (d *TimedDrop) baseEarnConditions() bool {
 	return d != nil &&
 		d.BaseDrop.baseEarnConditions() &&
 		d.RequiredMinutes > 0 &&
+		d.CurrentMinutes() < d.RequiredMinutes &&
 		d.ExtraCurrentMinutes < MaxExtraMinutes
+}
+
+func (d *TimedDrop) autoClaimable() bool {
+	return d != nil &&
+		d.RequiredMinutes > 0 &&
+		len(d.PreconditionDropIDs) == 0 &&
+		d.hasBadgeOrEmoteBenefit()
 }
 
 func (d *TimedDrop) UpdateMinutes(newMinutes int) bool {

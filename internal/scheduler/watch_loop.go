@@ -119,6 +119,7 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 
 func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel, watchReported bool) {
 	if s.syncProgressFromGQL(ctx, channel) {
+		s.refreshWhenChannelExhausted(channel)
 		return
 	}
 
@@ -130,6 +131,7 @@ func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel,
 
 	completedReward, reachedLimit, updated := s.bumpActiveCampaign(now, &channel)
 	if !updated {
+		s.refreshWhenChannelExhausted(channel)
 		return
 	}
 	if completedReward {
@@ -139,6 +141,23 @@ func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel,
 	if reachedLimit {
 		s.ChangeState(StateChannelSwitch)
 	}
+}
+
+// 观看时长打满但认领事件迟到/丢失时, 频道上不再有可推进的活动。此时立即刷新 inventory
+// 去认领掉宝并重算规划, 否则 watch 循环会一直向该频道空转到下次维护重载
+func (s *Scheduler) refreshWhenChannelExhausted(channel domain.Channel) {
+	now := s.nowUTC()
+
+	s.mu.RLock()
+	exhausted := s.activeCampaignLocked(now, &channel) == nil &&
+		s.pendingRewardCompletionCampaignLocked(now, &channel) == nil
+	s.mu.RUnlock()
+	if !exhausted {
+		return
+	}
+
+	s.logger.Info("当前频道已无可推进的活动，刷新 inventory", watchingLogAttrs(channel)...)
+	s.ChangeState(StateInventoryFetch)
 }
 
 func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Channel) bool {

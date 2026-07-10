@@ -170,6 +170,72 @@ func TestResolveProgressRequestsSwitchWhenExtraMinutesHitLimit(t *testing.T) {
 	}
 }
 
+func TestResolveProgressRefreshesInventoryWhenChannelHasNothingLeftToEarn(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Watched"}
+	campaign := mustCampaign(t, campaignSpecWithDrop(
+		"campaign-full",
+		game,
+		now.Add(-time.Hour),
+		now.Add(time.Hour),
+		nil,
+		domain.TimedDropSpec{RequiredMinutes: 30, RealCurrentMinutes: 30},
+	))
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+	scheduler.wantedGames = []domain.Game{game}
+	channel := domain.Channel{
+		ID:    1,
+		Login: "channel",
+		Stream: &domain.Stream{
+			BroadcastID:  1,
+			Game:         &game,
+			DropsEnabled: true,
+		},
+	}
+
+	scheduler.resolveProgress(context.Background(), channel, true)
+	if scheduler.State() != StateInventoryFetch {
+		t.Fatalf("观看时长已满但尚未认领时应刷新 inventory 而不是空转: %s", scheduler.State())
+	}
+}
+
+func TestResolveProgressKeepsWatchingWhileCampaignStillEarnable(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Watched"}
+	campaign := mustCampaign(t, campaignSpecWithDrop(
+		"campaign-partial",
+		game,
+		now.Add(-time.Hour),
+		now.Add(time.Hour),
+		nil,
+		domain.TimedDropSpec{RequiredMinutes: 30, RealCurrentMinutes: 10},
+	))
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+	scheduler.wantedGames = []domain.Game{game}
+	channel := domain.Channel{
+		ID:    1,
+		Login: "channel",
+		Stream: &domain.Stream{
+			BroadcastID:  1,
+			Game:         &game,
+			DropsEnabled: true,
+		},
+	}
+
+	scheduler.resolveProgress(context.Background(), channel, true)
+	if scheduler.State() != StateIdle {
+		t.Fatalf("活动仍可推进时不应触发状态切换: %s", scheduler.State())
+	}
+}
+
 func TestResolveProgressCompletesRewardCampaignWithoutCurrentDrop(t *testing.T) {
 	t.Parallel()
 
