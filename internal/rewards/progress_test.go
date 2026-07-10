@@ -84,16 +84,19 @@ func TestFileStorePruneExpiredRemovesOnlyExpiredRecordsWithExpiry(t *testing.T) 
 	if _, err := store.RecordCompletion("reward:fresh", "reward:drop-fresh", 5, now.Add(-time.Hour), now.Add(-6*24*time.Hour)); err != nil {
 		t.Fatalf("写入宽限期内记录失败: %v", err)
 	}
-	if _, err := store.RecordProgress("reward:legacy", "reward:drop-legacy", 5, true, now.Add(-30*24*time.Hour)); err != nil {
-		t.Fatalf("写入旧格式记录失败: %v", err)
+	if _, err := store.RecordProgress("reward:legacy-stale", "reward:drop-legacy-stale", 5, true, now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatalf("写入旧格式过期记录失败: %v", err)
+	}
+	if _, err := store.RecordProgress("reward:legacy-fresh", "reward:drop-legacy-fresh", 5, true, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("写入旧格式新鲜记录失败: %v", err)
 	}
 
 	removed, err := store.PruneExpired(now, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("PruneExpired 返回错误: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("应只清理一条过期记录: %d", removed)
+	if removed != 2 {
+		t.Fatalf("应清理过期记录与陈旧的旧格式记录: %d", removed)
 	}
 
 	reloaded, err := NewFileStore(path)
@@ -107,8 +110,11 @@ func TestFileStorePruneExpiredRemovesOnlyExpiredRecordsWithExpiry(t *testing.T) 
 	if _, ok := snapshot["reward:fresh"]; !ok {
 		t.Fatalf("宽限期内记录不应被清理: %#v", snapshot)
 	}
-	if _, ok := snapshot["reward:legacy"]; !ok {
-		t.Fatalf("无 ExpiresAt 的旧记录不应被清理: %#v", snapshot)
+	if _, ok := snapshot["reward:legacy-stale"]; ok {
+		t.Fatalf("无 ExpiresAt 的陈旧记录应按更新时间清理, 否则文件只增不减: %#v", snapshot)
+	}
+	if _, ok := snapshot["reward:legacy-fresh"]; !ok {
+		t.Fatalf("无 ExpiresAt 但仍在宽限期内的记录不应被清理: %#v", snapshot)
 	}
 }
 

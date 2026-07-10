@@ -147,7 +147,11 @@ func (s *FileStore) PruneExpired(now time.Time, gracePeriod time.Duration) (int,
 	previous.Progress = cloneProgressMap(s.data.Progress)
 	removed := 0
 	for campaignID, progress := range s.data.Progress {
-		if progress.ExpiresAt.IsZero() || now.Before(progress.ExpiresAt.Add(gracePeriod)) {
+		deadline := progress.ExpiresAt
+		if deadline.IsZero() {
+			deadline = progress.UpdatedAt
+		}
+		if deadline.IsZero() || now.Before(deadline.Add(gracePeriod)) {
 			continue
 		}
 		delete(s.data.Progress, campaignID)
