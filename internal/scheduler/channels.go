@@ -98,6 +98,10 @@ func (s *Scheduler) canWatch(channel domain.Channel) bool {
 	now := s.nowUTC()
 	snapshot := s.snapshotCopy()
 
+	if s.channelStalled(channel.ID, now) {
+		return false
+	}
+
 	for _, campaign := range snapshot.Inventory {
 		if campaign == nil || !campaign.CanEarn(now, &channel, settings.EnableBadgesEmotes, false) {
 			continue
@@ -140,6 +144,7 @@ func (s *Scheduler) removeChannels(channelIDs []int64) {
 		if s.watchingChannelID == channelID {
 			s.watchingChannelID = 0
 			s.lastProgressAt = time.Time{}
+			s.lastAdvanceAt = time.Time{}
 		}
 		streamStateKey, _ := pubsub.TopicKey(pubsub.CategoryChannel, pubsub.TopicStreamState, channelID)
 		streamUpdateKey, _ := pubsub.TopicKey(pubsub.CategoryChannel, pubsub.TopicStreamUpdate, channelID)

@@ -24,6 +24,7 @@ func (s *Scheduler) watch(channelID int64) {
 	s.watchingChannelID = channelID
 	if changed {
 		s.resetProgressAnnouncementsLocked()
+		s.lastAdvanceAt = s.now().UTC()
 	}
 	channel, ok = s.channels[channelID]
 	s.mu.Unlock()
@@ -51,6 +52,7 @@ func (s *Scheduler) stopWatching() {
 	channel, ok = s.channels[channelID]
 	s.watchingChannelID = 0
 	s.lastProgressAt = time.Time{}
+	s.lastAdvanceAt = time.Time{}
 	s.mu.Unlock()
 
 	if changed {
@@ -100,8 +102,12 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 			return
 		}
 
+		stateBefore := s.State()
 		if s.shouldResolveProgress(sentAt) {
 			s.resolveProgress(ctx, channel, watchReported)
+		}
+		if s.State() == stateBefore {
+			s.checkWatchStall(channelID)
 		}
 
 		elapsed := s.nowUTC().Sub(sentAt)

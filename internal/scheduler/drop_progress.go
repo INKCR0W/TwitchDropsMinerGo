@@ -50,9 +50,13 @@ func (s *Scheduler) observeDropProgress(now time.Time, channel *domain.Channel, 
 	}
 
 	campaign := drop.Campaign
+	beforeReal := drop.RealCurrentMinutes
 	campaign.ObserveMinutes(drop, currentMinutes)
 	s.logDropOverviewLocked(campaign, campaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 	s.lastProgressAt = now.UTC()
+	if drop.RealCurrentMinutes > beforeReal {
+		s.lastAdvanceAt = now.UTC()
+	}
 	return campaign.ID, drop.EndsAt, true
 }
 
@@ -71,9 +75,11 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 			return false, false, false
 		}
 	}
+	// 本地估算推进也算进度, 否则只靠本地计时的 reward 活动会被误判卡住
 	if activeCampaign.IsRewardCampaign {
 		completed := activeCampaign.BumpRewardMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
 		s.lastProgressAt = now.UTC()
+		s.lastAdvanceAt = now.UTC()
 		s.logDropOverviewLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 		if completed {
 			completed = s.recordRewardCompletedLocked(activeCampaign, now)

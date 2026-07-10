@@ -112,6 +112,7 @@ func New(options Options) (*Scheduler, error) {
 		rewardPruneGrace:  rewardPruneGrace,
 		state:             StateIdle,
 		channels:          make(map[int64]domain.Channel),
+		stalledChannels:   make(map[int64]time.Time),
 		stateChanged:      make(chan struct{}, 1),
 		watchSignal:       make(chan struct{}, 1),
 	}

@@ -158,6 +158,8 @@ type Scheduler struct {
 	selectedChannelID        int64
 	watchingChannelID        int64
 	lastProgressAt           time.Time
+	lastAdvanceAt            time.Time
+	stalledChannels          map[int64]time.Time
 	announcedProgressDropIDs map[string]struct{}
 	lastRuntimeError         error
 	maintenanceCancel        context.CancelFunc

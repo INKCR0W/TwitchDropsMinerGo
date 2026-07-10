@@ -24,6 +24,8 @@ const (
 // 可以晚挖但不会因插队而来不及完成。
 const DefaultSmartPrioritySafetyMinutes = 120
 
+const DefaultWatchStallMinutes = 10
+
 type LoggingSettings struct {
 	Level        string `json:"level"`
 	Format       string `json:"format"`
@@ -56,6 +58,7 @@ type Settings struct {
 	PriorityMode        PriorityMode `json:"priority_mode"`
 
 	SmartPrioritySafetyMinutes int             `json:"smart_priority_safety_minutes"`
+	WatchStallMinutes          int             `json:"watch_stall_minutes"`
 	Log                        LoggingSettings `json:"log"`
 }
 
@@ -68,6 +71,7 @@ func DefaultSettings() Settings {
 		TrayNotifications:          true,
 		PriorityMode:               PriorityOnly,
 		SmartPrioritySafetyMinutes: DefaultSmartPrioritySafetyMinutes,
+		WatchStallMinutes:          DefaultWatchStallMinutes,
 		Log: LoggingSettings{
 			Level:        "info",
 			Format:       "text",
@@ -109,6 +113,7 @@ func (s Settings) IsZero() bool {
 		!s.AvailableDropsCheck &&
 		s.PriorityMode == "" &&
 		s.SmartPrioritySafetyMinutes == 0 &&
+		s.WatchStallMinutes == 0 &&
 		s.Log == (LoggingSettings{})
 }
 
@@ -191,6 +196,13 @@ func (s *Settings) Validate() error {
 	}
 	if s.SmartPrioritySafetyMinutes == 0 {
 		s.SmartPrioritySafetyMinutes = defaults.SmartPrioritySafetyMinutes
+	}
+
+	if s.WatchStallMinutes < 0 {
+		return fmt.Errorf("watch_stall_minutes 不能小于 0")
+	}
+	if s.WatchStallMinutes == 0 {
+		s.WatchStallMinutes = defaults.WatchStallMinutes
 	}
 
 	s.Log.Level = strings.ToLower(strings.TrimSpace(s.Log.Level))
