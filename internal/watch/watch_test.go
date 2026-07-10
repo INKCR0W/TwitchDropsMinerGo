@@ -38,13 +38,13 @@ func TestBuildWatchBodyEncodesMinuteWatchedPayload(t *testing.T) {
 		},
 	}
 
-	body, err := BuildWatchBody(channel, 777)
+	body, err := BuildWatchBody(channel, 777, "2026-07-10T18:45:54.509Z")
 	if err != nil {
 		t.Fatalf("BuildWatchBody 返回错误: %v", err)
 	}
 
 	got := decodeWatchBody(t, body)
-	expected := `[{"event":"minute-watched","properties":{"broadcast_id":"99","channel_id":"42","channel":"streamer","hidden":false,"live":true,"location":"channel","logged_in":true,"muted":false,"player":"site","user_id":777}}]`
+	expected := `[{"event":"minute-watched","properties":{"broadcast_id":"99","channel_id":"42","channel":"streamer","client_time":"2026-07-10T18:45:54.509Z","game":"Apex Legends","game_id":"7","hidden":false,"is_live":true,"live":true,"location":"channel","logged_in":true,"minutes_logged":1,"muted":false,"player":"site","user_id":777}}]`
 	if got != expected {
 		t.Fatalf("watch payload 不匹配:\n got=%s\nwant=%s", got, expected)
 	}
@@ -54,8 +54,27 @@ func TestBuildWatchBodyRejectsMissingBroadcast(t *testing.T) {
 	t.Parallel()
 
 	channel := &domain.Channel{ID: 42, Login: "streamer", Stream: &domain.Stream{}}
-	if _, err := BuildWatchBody(channel, 777); err == nil {
+	if _, err := BuildWatchBody(channel, 777, ""); err == nil {
 		t.Fatal("缺少 broadcast_id 时应返回错误")
+	}
+}
+
+func TestBuildWatchBodyOmitsGameWhenUnknown(t *testing.T) {
+	t.Parallel()
+
+	build := func(stream *domain.Stream) string {
+		body, err := BuildWatchBody(&domain.Channel{ID: 42, Login: "streamer", Stream: stream}, 777, "t")
+		if err != nil {
+			t.Fatalf("BuildWatchBody 返回错误: %v", err)
+		}
+		return decodeWatchBody(t, body)
+	}
+
+	if got := build(&domain.Stream{BroadcastID: 99}); !strings.Contains(got, `"game":""`) || !strings.Contains(got, `"game_id":""`) {
+		t.Fatalf("game 未知时 game/game_id 应留空: %s", got)
+	}
+	if got := build(&domain.Stream{BroadcastID: 99, Game: &domain.Game{Name: "Special Events"}}); !strings.Contains(got, `"game":"Special Events"`) || !strings.Contains(got, `"game_id":""`) {
+		t.Fatalf("game_id 缺失时应仅留空 game_id: %s", got)
 	}
 }
 
@@ -92,7 +111,7 @@ func TestSendWatchReturnsTrueOnStatusCode204(t *testing.T) {
 		t.Fatalf("Content-Type 不匹配: %q", ct)
 	}
 	got := decodeWatchBody(t, req.Body)
-	for _, want := range []string{`"broadcast_id":"1234"`, `"channel_id":"88"`, `"user_id":999`, `"location":"channel"`, `"player":"site"`} {
+	for _, want := range []string{`"broadcast_id":"1234"`, `"channel_id":"88"`, `"user_id":999`, `"location":"channel"`, `"player":"site"`, `"game":"Rust"`, `"game_id":"5"`, `"minutes_logged":1`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("payload 缺少 %s: %s", want, got)
 		}

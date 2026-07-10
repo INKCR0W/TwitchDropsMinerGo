@@ -23,19 +23,24 @@ type spadeEvent struct {
 }
 
 type spadeProperties struct {
-	BroadcastID string `json:"broadcast_id"`
-	ChannelID   string `json:"channel_id"`
-	Channel     string `json:"channel"`
-	Hidden      bool   `json:"hidden"`
-	Live        bool   `json:"live"`
-	Location    string `json:"location"`
-	LoggedIn    bool   `json:"logged_in"`
-	Muted       bool   `json:"muted"`
-	Player      string `json:"player"`
-	UserID      int64  `json:"user_id"`
+	BroadcastID   string `json:"broadcast_id"`
+	ChannelID     string `json:"channel_id"`
+	Channel       string `json:"channel"`
+	ClientTime    string `json:"client_time"`
+	Game          string `json:"game"`
+	GameID        string `json:"game_id"`
+	Hidden        bool   `json:"hidden"`
+	IsLive        bool   `json:"is_live"`
+	Live          bool   `json:"live"`
+	Location      string `json:"location"`
+	LoggedIn      bool   `json:"logged_in"`
+	MinutesLogged int    `json:"minutes_logged"`
+	Muted         bool   `json:"muted"`
+	Player        string `json:"player"`
+	UserID        int64  `json:"user_id"`
 }
 
-func BuildWatchBody(channel *domain.Channel, userID int64) ([]byte, error) {
+func BuildWatchBody(channel *domain.Channel, userID int64, clientTime string) ([]byte, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("频道不能为空")
 	}
@@ -55,20 +60,35 @@ func BuildWatchBody(channel *domain.Channel, userID int64) ([]byte, error) {
 		return nil, fmt.Errorf("watch payload 缺少 broadcast_id")
 	}
 
+	// Twitch 靠 game_id 把观看归属到对应游戏的掉宝活动, 缺失时 spade 会 204 收下但不计时
+	gameName := ""
+	gameID := ""
+	if channel.Stream.Game != nil {
+		gameName = channel.Stream.Game.Name
+		if channel.Stream.Game.ID > 0 {
+			gameID = strconv.FormatInt(channel.Stream.Game.ID, 10)
+		}
+	}
+
 	payload := []spadeEvent{
 		{
 			Event: "minute-watched",
 			Properties: spadeProperties{
-				BroadcastID: strconv.FormatInt(channel.Stream.BroadcastID, 10),
-				ChannelID:   strconv.FormatInt(channel.ID, 10),
-				Channel:     channel.Login,
-				Hidden:      false,
-				Live:        true,
-				Location:    "channel",
-				LoggedIn:    true,
-				Muted:       false,
-				Player:      "site",
-				UserID:      userID,
+				BroadcastID:   strconv.FormatInt(channel.Stream.BroadcastID, 10),
+				ChannelID:     strconv.FormatInt(channel.ID, 10),
+				Channel:       channel.Login,
+				ClientTime:    clientTime,
+				Game:          gameName,
+				GameID:        gameID,
+				Hidden:        false,
+				IsLive:        true,
+				Live:          true,
+				Location:      "channel",
+				LoggedIn:      true,
+				MinutesLogged: 1,
+				Muted:         false,
+				Player:        "site",
+				UserID:        userID,
 			},
 		},
 	}
@@ -110,7 +130,8 @@ func (t *Tracker) SendWatch(ctx context.Context, channelID int64) (bool, error) 
 		return false, nil
 	}
 
-	body, err := BuildWatchBody(&channel, t.authState.Snapshot().UserID)
+	clientTime := t.now().UTC().Format("2006-01-02T15:04:05.000Z")
+	body, err := BuildWatchBody(&channel, t.authState.Snapshot().UserID, clientTime)
 	if err != nil {
 		return false, err
 	}
