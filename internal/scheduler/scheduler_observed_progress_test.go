@@ -198,4 +198,3 @@ func TestResolveProgressKeepsChannelWhenAnotherCampaignStillEarnable(t *testing.
 		t.Fatalf("频道上仍有可推进的活动, 不应切换状态: %s", scheduler.State())
 	}
 }
-
