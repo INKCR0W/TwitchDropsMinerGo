@@ -3,7 +3,6 @@ package httpclient
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -63,24 +62,6 @@ type Request struct {
 	Headers         http.Header
 	Body            []byte
 	InvalidateAfter time.Time
-}
-
-type Response struct {
-	StatusCode int
-	Header     http.Header
-	Body       []byte
-}
-
-func (r Response) DecodeJSON(target any) error {
-	if err := json.Unmarshal(r.Body, target); err != nil {
-		return fmt.Errorf("解析响应 JSON 失败: %w", err)
-	}
-
-	return nil
-}
-
-func (r Response) Text() string {
-	return string(r.Body)
 }
 
 func New(options Options) (*Client, error) {
