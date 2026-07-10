@@ -107,7 +107,7 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 			s.resolveProgress(ctx, channel, watchReported)
 		}
 		if s.State() == stateBefore {
-			s.checkWatchStall(channelID)
+			s.checkWatchStall(channelID, watchReported)
 		}
 
 		elapsed := s.nowUTC().Sub(sentAt)

@@ -11,7 +11,7 @@ func (s *Scheduler) channelStalled(channelID int64, now time.Time) bool {
 	return ok && now.Before(until)
 }
 
-func (s *Scheduler) checkWatchStall(channelID int64) {
+func (s *Scheduler) checkWatchStall(channelID int64, watchReported bool) {
 	timeout := time.Duration(s.settingsCopy().WatchStallMinutes) * time.Minute
 	if timeout <= 0 {
 		return
@@ -24,8 +24,12 @@ func (s *Scheduler) checkWatchStall(channelID int64) {
 			delete(s.stalledChannels, id)
 		}
 	}
-	stalled := channelID != 0 &&
-		s.watchingChannelID == channelID &&
+	watching := channelID != 0 && s.watchingChannelID == channelID
+	if watching && !watchReported {
+		// 发送 watch 失败是我方问题, 重置计时以免把本地掉线归咎于频道
+		s.lastAdvanceAt = now
+	}
+	stalled := watching && watchReported &&
 		!s.lastAdvanceAt.IsZero() &&
 		now.Sub(s.lastAdvanceAt) >= timeout
 	if stalled {

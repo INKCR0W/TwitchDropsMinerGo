@@ -56,7 +56,7 @@ func TestCheckWatchStallAvoidsStalledChannelAndSwitches(t *testing.T) {
 		t.Fatal("前置条件: 卡住前频道应可观看")
 	}
 
-	scheduler.checkWatchStall(channel.ID)
+	scheduler.checkWatchStall(channel.ID, true)
 
 	if scheduler.State() != StateChannelSwitch {
 		t.Fatalf("长时间无进度后应请求切台: %s", scheduler.State())
@@ -76,7 +76,7 @@ func TestCheckWatchStallLeavesAdvancingChannelAlone(t *testing.T) {
 	scheduler, channel := newStallScheduler(t, now)
 	scheduler.lastAdvanceAt = now.Add(-3 * time.Minute)
 
-	scheduler.checkWatchStall(channel.ID)
+	scheduler.checkWatchStall(channel.ID, true)
 
 	if scheduler.State() != StateIdle {
 		t.Fatalf("仍在推进的频道不应触发切台: %s", scheduler.State())
@@ -92,7 +92,7 @@ func TestChannelStalledExpiresAfterCooldown(t *testing.T) {
 	now := testTime()
 	scheduler, channel := newStallScheduler(t, now)
 	scheduler.lastAdvanceAt = now.Add(-11 * time.Minute)
-	scheduler.checkWatchStall(channel.ID)
+	scheduler.checkWatchStall(channel.ID, true)
 
 	if !scheduler.channelStalled(channel.ID, now) {
 		t.Fatal("刚判定卡住时应处于回避期")
@@ -153,7 +153,7 @@ func TestBumpLocalTimedRewardResetsStallClock(t *testing.T) {
 		t.Fatal("前置条件: 只靠本地计时的 reward 活动应发生本地补分")
 	}
 
-	scheduler.checkWatchStall(channel.ID)
+	scheduler.checkWatchStall(channel.ID, true)
 
 	if scheduler.State() != StateIdle {
 		t.Fatalf("本地计时的 reward 活动在本地推进后不应被判卡住: %s", scheduler.State())
@@ -174,10 +174,32 @@ func TestNormalLocalBumpDoesNotDisarmStall(t *testing.T) {
 		t.Fatal("前置条件: 普通活动应发生本地补分")
 	}
 
-	scheduler.checkWatchStall(channel.ID)
+	scheduler.checkWatchStall(channel.ID, true)
 
 	if scheduler.State() != StateChannelSwitch {
 		t.Fatalf("普通活动的本地估算不是服务器进度, 不应阻止卡住判定: %s", scheduler.State())
+	}
+}
+
+func TestCheckWatchStallResetsClockOnWatchSendFailure(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	scheduler, channel := newStallScheduler(t, now)
+	scheduler.lastAdvanceAt = now.Add(-11 * time.Minute)
+
+	scheduler.checkWatchStall(channel.ID, false)
+
+	if scheduler.State() != StateIdle {
+		t.Fatalf("发送 watch 失败时不应把本地掉线判为频道卡住: %s", scheduler.State())
+	}
+	if scheduler.channelStalled(channel.ID, now) {
+		t.Fatal("发送失败不应回避频道")
+	}
+	// 计时已被重置, 恢复后的第一轮成功发送不应立刻误判
+	scheduler.checkWatchStall(channel.ID, true)
+	if scheduler.State() != StateIdle {
+		t.Fatalf("发送失败重置计时后, 恢复的第一轮不应立刻切台: %s", scheduler.State())
 	}
 }
 
@@ -188,7 +210,7 @@ func TestCheckWatchStallIgnoresNonWatchedChannel(t *testing.T) {
 	scheduler, channel := newStallScheduler(t, now)
 	scheduler.lastAdvanceAt = now.Add(-time.Hour)
 
-	scheduler.checkWatchStall(channel.ID + 999)
+	scheduler.checkWatchStall(channel.ID+999, true)
 
 	if scheduler.State() != StateIdle {
 		t.Fatalf("非当前观看频道不应触发切台: %s", scheduler.State())
@@ -206,7 +228,7 @@ func TestCheckWatchStallDisabledWhenThresholdZero(t *testing.T) {
 	scheduler.settings.WatchStallMinutes = 0
 	scheduler.lastAdvanceAt = now.Add(-time.Hour)
 
-	scheduler.checkWatchStall(channel.ID)
+	scheduler.checkWatchStall(channel.ID, true)
 
 	if scheduler.State() != StateIdle {
 		t.Fatalf("阈值为 0(禁用)时不应切台: %s", scheduler.State())
