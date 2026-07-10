@@ -49,6 +49,16 @@ miner-server --runtime-dir /path/to/runtime
 
 核心协议行为、数据模型和调度逻辑源自 [TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner)（MIT 许可证），由 DevilXD 及贡献者开发。
 
+## 赞助
+
+如果这个项目对你有帮助，欢迎请我喝杯咖啡。
+
+TRON（TRX / TRC-20）地址：
+
+```
+TRyXHMLAmXUK6KQbxhTzr2wFtfc1nkCrow
+```
+
 ## 许可证
 
 本项目基于 GNU General Public License v3.0 发布，详见 [LICENSE](LICENSE)。
