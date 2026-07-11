@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"twitchdropsminergo/internal/auth"
-	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/httpclient"
 )
@@ -136,16 +135,6 @@ func (f *fakeAuthState) Snapshot() auth.Snapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.snapshot
-}
-
-func mustCampaign(t *testing.T, spec domain.CampaignSpec) *domain.DropsCampaign {
-	t.Helper()
-
-	campaign, err := domain.NewCampaign(spec)
-	if err != nil {
-		t.Fatalf("NewCampaign 返回错误: %v", err)
-	}
-	return campaign
 }
 
 func testNow() time.Time {
