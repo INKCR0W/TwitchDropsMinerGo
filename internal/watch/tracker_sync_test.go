@@ -5,15 +5,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
-	"twitchdropsminergo/internal/inventory"
 )
 
-func TestSyncChannelUpdatesDisplayNameAndDropsEnabled(t *testing.T) {
+func TestSyncChannelUpdatesDisplayNameAndOfferedCampaigns(t *testing.T) {
 	t.Parallel()
 
 	fakeGQL := &fakeGQLClient{
@@ -57,37 +54,7 @@ func TestSyncChannelUpdatesDisplayNameAndDropsEnabled(t *testing.T) {
 		},
 	}
 
-	tracker := newTestTracker(t, testTrackerOptions{
-		gqlClient: fakeGQL,
-		settings: config.Settings{
-			AvailableDropsCheck: true,
-		},
-		inventory: inventory.Snapshot{
-			Campaigns: map[string]*domain.DropsCampaign{
-				"campaign-1": mustCampaign(t, domain.CampaignSpec{
-					ID:       "campaign-1",
-					Name:     "Campaign",
-					Game:     domain.Game{ID: 7, Name: "Game"},
-					Linked:   true,
-					Status:   "ACTIVE",
-					StartsAt: testNow().Add(-time.Hour),
-					EndsAt:   testNow().Add(time.Hour),
-					Drops: []domain.TimedDropSpec{
-						{
-							ID:              "drop-1",
-							Name:            "Drop",
-							StartsAt:        testNow().Add(-time.Hour),
-							EndsAt:          testNow().Add(time.Hour),
-							RequiredMinutes: 15,
-							Benefits: []domain.Benefit{
-								{ID: "benefit-1", Name: "Reward", Type: domain.BenefitTypeDirectEntitlement},
-							},
-						},
-					},
-				}),
-			},
-		},
-	})
+	tracker := newTestTracker(t, testTrackerOptions{gqlClient: fakeGQL})
 
 	tracker.AddChannel(domain.Channel{ID: 100, Login: "streamer"})
 
@@ -109,8 +76,8 @@ func TestSyncChannelUpdatesDisplayNameAndDropsEnabled(t *testing.T) {
 	if channel.Stream == nil {
 		t.Fatal("同步后应有 stream")
 	}
-	if !channel.Stream.DropsEnabled {
-		t.Fatal("AvailableDrops 命中本地 campaign 时应判定为可掉宝")
+	if !slices.Equal(channel.Stream.OfferedCampaignIDs, []string{"campaign-1"}) {
+		t.Fatalf("应记录 Twitch 报告的可推进活动: %#v", channel.Stream.OfferedCampaignIDs)
 	}
 	if channel.Stream.Viewers != 123 {
 		t.Fatalf("viewer 数不匹配: %d", channel.Stream.Viewers)
@@ -184,37 +151,7 @@ func TestSyncChannelsUsesBatchAndHandlesOfflineChannels(t *testing.T) {
 		},
 	}
 
-	tracker := newTestTracker(t, testTrackerOptions{
-		gqlClient: fakeGQL,
-		settings: config.Settings{
-			AvailableDropsCheck: true,
-		},
-		inventory: inventory.Snapshot{
-			Campaigns: map[string]*domain.DropsCampaign{
-				"campaign-1": mustCampaign(t, domain.CampaignSpec{
-					ID:       "campaign-1",
-					Name:     "Campaign",
-					Game:     domain.Game{ID: 7, Name: "Game"},
-					Linked:   true,
-					Status:   "ACTIVE",
-					StartsAt: testNow().Add(-time.Hour),
-					EndsAt:   testNow().Add(time.Hour),
-					Drops: []domain.TimedDropSpec{
-						{
-							ID:              "drop-1",
-							Name:            "Drop",
-							StartsAt:        testNow().Add(-time.Hour),
-							EndsAt:          testNow().Add(time.Hour),
-							RequiredMinutes: 15,
-							Benefits: []domain.Benefit{
-								{ID: "benefit-1", Name: "Reward", Type: domain.BenefitTypeDirectEntitlement},
-							},
-						},
-					},
-				}),
-			},
-		},
-	})
+	tracker := newTestTracker(t, testTrackerOptions{gqlClient: fakeGQL})
 
 	tracker.AddChannel(domain.Channel{ID: 1, Login: "one"})
 	tracker.AddChannel(domain.Channel{ID: 2, Login: "two"})
@@ -234,8 +171,11 @@ func TestSyncChannelsUsesBatchAndHandlesOfflineChannels(t *testing.T) {
 	}
 
 	first, ok := tracker.Channel(1)
-	if !ok || first.Stream == nil || !first.Stream.DropsEnabled {
-		t.Fatalf("频道 1 应在线且可掉宝: %#v", first)
+	if !ok || first.Stream == nil {
+		t.Fatalf("频道 1 应在线: %#v", first)
+	}
+	if !slices.Equal(first.Stream.OfferedCampaignIDs, []string{"campaign-1"}) {
+		t.Fatalf("频道 1 应记录可推进活动: %#v", first.Stream.OfferedCampaignIDs)
 	}
 
 	second, ok := tracker.Channel(2)

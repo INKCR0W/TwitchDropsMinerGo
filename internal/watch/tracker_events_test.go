@@ -127,6 +127,9 @@ func TestCheckOnlineResultDoesNotOverwriteLaterStreamDown(t *testing.T) {
 	releaseFetch := make(chan struct{})
 	fakeGQL := &fakeGQLClient{
 		doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
+			if operation.OperationName != "VideoPlayerStreamInfoOverlayChannel" {
+				return gql.Response{Data: map[string]any{"channel": nil}}, nil
+			}
 			close(fetchStarted)
 			<-releaseFetch
 			return gql.Response{

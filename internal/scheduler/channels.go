@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"twitchdropsminergo/internal/domain"
@@ -157,6 +158,20 @@ func (s *Scheduler) removeChannels(channelIDs []int64) {
 	}
 	s.pubsub.RemoveTopics(topics...)
 	s.signalWatch()
+}
+
+// 目录返回的 stream 不含 AvailableDrops 结果, 别把 ACL 同步已确认的答案抹回未知
+func carryOverKnownStream(existing domain.Channel, channel *domain.Channel) {
+	if existing.Stream == nil || channel == nil || channel.Stream == nil {
+		return
+	}
+	if existing.Stream.DropsEnabled {
+		channel.Stream.DropsEnabled = true
+	}
+	// 换了一场直播就不能沿用上一场的结论, 否则会把"拿不到"永久钉死在新广播上
+	if channel.Stream.OfferedCampaignIDs == nil && existing.Stream.BroadcastID == channel.Stream.BroadcastID {
+		channel.Stream.OfferedCampaignIDs = slices.Clone(existing.Stream.OfferedCampaignIDs)
+	}
 }
 
 func (s *Scheduler) upsertChannel(channel domain.Channel) {

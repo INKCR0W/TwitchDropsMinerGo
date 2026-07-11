@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 type Stream struct {
 	BroadcastID  int64
@@ -8,6 +11,8 @@ type Stream struct {
 	Viewers      int
 	Title        string
 	DropsEnabled bool
+	// Twitch 报告的该频道当前可推进的活动; nil 表示尚未查到
+	OfferedCampaignIDs []string
 }
 
 type Channel struct {
@@ -39,6 +44,16 @@ func (c *Channel) Offline() bool {
 
 func (c *Channel) PendingOnline() bool {
 	return c != nil && c.Stream == nil && c.PendingStream
+}
+
+func (c *Channel) OffersCampaign(campaignID string) bool {
+	if c == nil || c.Stream == nil {
+		return false
+	}
+	if c.Stream.OfferedCampaignIDs == nil {
+		return true
+	}
+	return slices.Contains(c.Stream.OfferedCampaignIDs, campaignID)
 }
 
 func (c *Channel) CurrentGame() *Game {

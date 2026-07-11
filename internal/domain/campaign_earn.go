@@ -91,8 +91,13 @@ func (c *DropsCampaign) baseCanEarn(now time.Time, channel *Channel, enableBadge
 		return true
 	}
 
+	if c.Game.IsSpecial() {
+		// AllowedChannels 只是静态资格名单, 频道此刻是否计分以 Twitch 的 viewerDropCampaigns 为准
+		return c.IsRewardCampaign || channel.OffersCampaign(c.ID)
+	}
+
 	channelGame := channel.CurrentGame()
-	return (channelGame != nil && channelGame.ID == c.Game.ID) || c.Game.IsSpecial()
+	return channelGame != nil && channelGame.ID == c.Game.ID
 }
 
 func (c *DropsCampaign) allowsChannel(channelID int64) bool {

@@ -136,6 +136,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 			return err
 		}
 		for _, channel := range channels {
+			carryOverKnownStream(newChannels[channel.ID], &channel)
 			s.upsertChannel(channel)
 			newChannels[channel.ID] = channel
 		}
@@ -152,9 +153,7 @@ func (s *Scheduler) handleChannelsFetch(ctx context.Context) error {
 			return err
 		}
 		for _, channel := range channels {
-			if existing, exists := newChannels[channel.ID]; exists && existing.Stream != nil && existing.Stream.DropsEnabled && channel.Stream != nil {
-				channel.Stream.DropsEnabled = true
-			}
+			carryOverKnownStream(newChannels[channel.ID], &channel)
 			s.upsertChannel(channel)
 			newChannels[channel.ID] = channel
 		}

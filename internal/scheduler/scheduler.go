@@ -44,7 +44,6 @@ type InventoryRefresher interface {
 }
 
 type WatchTracker interface {
-	Configure(config.Settings, inventory.Snapshot)
 	AddChannel(domain.Channel)
 	RemoveChannel(int64)
 	Channel(int64) (domain.Channel, bool)

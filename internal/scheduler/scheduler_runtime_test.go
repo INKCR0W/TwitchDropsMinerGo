@@ -182,12 +182,10 @@ func TestStatusSnapshotIncludesSchedulerAndPubSubState(t *testing.T) {
 	}
 }
 
-func TestUpdateSettingsReconfiguresTrackerAndRequestsReload(t *testing.T) {
+func TestUpdateSettingsAppliesSettingsAndRequestsReload(t *testing.T) {
 	t.Parallel()
 
-	tracker := newFakeTracker()
 	scheduler := newTestScheduler(t, testSchedulerOptions{
-		tracker: tracker,
 		settings: config.Settings{
 			Priority: []string{"A"},
 		},
@@ -195,7 +193,6 @@ func TestUpdateSettingsReconfiguresTrackerAndRequestsReload(t *testing.T) {
 	scheduler.state = StateIdle
 
 	updated := config.DefaultSettings()
-	updated.AvailableDropsCheck = true
 	updated.Priority = []string{"B"}
 
 	if err := scheduler.UpdateSettings(updated); err != nil {
@@ -205,11 +202,8 @@ func TestUpdateSettingsReconfiguresTrackerAndRequestsReload(t *testing.T) {
 	if scheduler.State() != StateInventoryFetch {
 		t.Fatalf("UpdateSettings 应触发 inventory reload: %s", scheduler.State())
 	}
-	if !tracker.configuredSettings.AvailableDropsCheck {
-		t.Fatalf("Tracker 未收到最新配置: %#v", tracker.configuredSettings)
-	}
-	if tracker.configuredSettings.Priority[0] != "B" {
-		t.Fatalf("Tracker Priority 配置不匹配: %#v", tracker.configuredSettings)
+	if applied := scheduler.settingsCopy(); applied.Priority[0] != "B" {
+		t.Fatalf("新配置未生效: %#v", applied)
 	}
 }
 

@@ -2,15 +2,12 @@ package watch
 
 import (
 	"fmt"
-	"time"
 
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
-	"twitchdropsminergo/internal/inventory"
 )
 
-func parseGetStreamInfoResponse(spec channelSpec, response gql.Response, availableDropsCheck bool) (fetchedChannel, error) {
+func parseGetStreamInfoResponse(spec channelSpec, response gql.Response) (fetchedChannel, error) {
 	userValue, err := nestedMap(response.Data, "data", "user")
 	if err != nil {
 		return fetchedChannel{}, err
@@ -36,7 +33,7 @@ func parseGetStreamInfoResponse(spec channelSpec, response gql.Response, availab
 		Game:         parseGame(optionalMap(settingsData["game"])),
 		Viewers:      int(int64Value(streamData, "viewersCount")),
 		Title:        stringValue(settingsData, "title"),
-		DropsEnabled: !availableDropsCheck,
+		DropsEnabled: true,
 	}
 
 	return fetchedChannel{
@@ -46,17 +43,26 @@ func parseGetStreamInfoResponse(spec channelSpec, response gql.Response, availab
 }
 
 func parseAvailableDropsResponse(response gql.Response) ([]string, error) {
+	// 出错时 GQL 层会把出错路径填成 null, 那不是"此频道无掉宝可拿", 只能当作未知
+	if len(response.Errors) > 0 || response.Error != "" {
+		return nil, nil
+	}
+
 	channelValue, err := nestedMap(response.Data, "data", "channel")
 	if err != nil {
 		return nil, err
 	}
 	if channelValue == nil {
-		return nil, nil
+		return []string{}, nil
 	}
 
 	dropsValue, ok := channelValue["viewerDropCampaigns"]
-	if !ok || isNilValue(dropsValue) {
+	if !ok {
+		// 字段缺失是 schema 漂移, 不是"此频道无掉宝可拿"
 		return nil, nil
+	}
+	if isNilValue(dropsValue) {
+		return []string{}, nil
 	}
 
 	items, err := asSlice(dropsValue, "data.channel.viewerDropCampaigns")
@@ -76,17 +82,4 @@ func parseAvailableDropsResponse(response gql.Response) ([]string, error) {
 	}
 
 	return ids, nil
-}
-
-func dropsEnabled(now time.Time, settings config.Settings, snapshot inventory.Snapshot, channel *domain.Channel, availableCampaignIDs []string) bool {
-	for _, campaignID := range availableCampaignIDs {
-		campaign := snapshot.Campaigns[campaignID]
-		if campaign == nil {
-			continue
-		}
-		if campaign.CanEarn(now, channel, settings.EnableBadgesEmotes, true) {
-			return true
-		}
-	}
-	return false
 }

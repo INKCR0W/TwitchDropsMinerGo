@@ -8,19 +8,15 @@ import (
 	"time"
 
 	"twitchdropsminergo/internal/auth"
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/httpclient"
-	"twitchdropsminergo/internal/inventory"
 )
 
 type testTrackerOptions struct {
 	gqlClient   GQLClient
 	spadeClient SpadeClient
 	authState   AuthState
-	settings    config.Settings
-	inventory   inventory.Snapshot
 	sleep       func(context.Context, time.Duration) error
 	onlineDelay time.Duration
 }
@@ -74,7 +70,6 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 		}
 	})
 
-	tracker.Configure(options.settings, options.inventory)
 	return tracker
 }
 

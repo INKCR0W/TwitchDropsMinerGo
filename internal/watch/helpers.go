@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,7 @@ func cloneStream(stream *domain.Stream) *domain.Stream {
 		game := *stream.Game
 		cloned.Game = &game
 	}
+	cloned.OfferedCampaignIDs = slices.Clone(stream.OfferedCampaignIDs)
 	return &cloned
 }
 

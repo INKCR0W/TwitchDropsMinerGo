@@ -45,17 +45,16 @@ type FileStore struct {
 }
 
 type Settings struct {
-	Proxy               string       `json:"proxy"`
-	Language            string       `json:"language"`
-	DarkMode            bool         `json:"dark_mode"`
-	Exclude             []string     `json:"exclude"`
-	Priority            []string     `json:"priority"`
-	AutostartTray       bool         `json:"autostart_tray"`
-	ConnectionQuality   int          `json:"connection_quality"`
-	TrayNotifications   bool         `json:"tray_notifications"`
-	EnableBadgesEmotes  bool         `json:"enable_badges_emotes"`
-	AvailableDropsCheck bool         `json:"available_drops_check"`
-	PriorityMode        PriorityMode `json:"priority_mode"`
+	Proxy              string       `json:"proxy"`
+	Language           string       `json:"language"`
+	DarkMode           bool         `json:"dark_mode"`
+	Exclude            []string     `json:"exclude"`
+	Priority           []string     `json:"priority"`
+	AutostartTray      bool         `json:"autostart_tray"`
+	ConnectionQuality  int          `json:"connection_quality"`
+	TrayNotifications  bool         `json:"tray_notifications"`
+	EnableBadgesEmotes bool         `json:"enable_badges_emotes"`
+	PriorityMode       PriorityMode `json:"priority_mode"`
 
 	SmartPrioritySafetyMinutes int             `json:"smart_priority_safety_minutes"`
 	WatchStallMinutes          int             `json:"watch_stall_minutes"`
@@ -110,7 +109,6 @@ func (s Settings) IsZero() bool {
 		s.ConnectionQuality == 0 &&
 		!s.TrayNotifications &&
 		!s.EnableBadgesEmotes &&
-		!s.AvailableDropsCheck &&
 		s.PriorityMode == "" &&
 		s.SmartPrioritySafetyMinutes == 0 &&
 		s.WatchStallMinutes == 0 &&

@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/gql"
-	"twitchdropsminergo/internal/inventory"
 )
 
 func (t *Tracker) SyncChannel(ctx context.Context, channelID int64) (bool, error) {
@@ -14,16 +12,16 @@ func (t *Tracker) SyncChannel(ctx context.Context, channelID int64) (bool, error
 		return false, fmt.Errorf("watch 跟踪器未初始化")
 	}
 
-	spec, settings, snapshot, err := t.lookupChannel(channelID)
+	spec, err := t.lookupChannel(channelID)
 	if err != nil {
 		return false, err
 	}
 
-	return t.syncFetchedChannel(ctx, spec, settings, snapshot)
+	return t.syncFetchedChannel(ctx, spec)
 }
 
-func (t *Tracker) syncFetchedChannel(ctx context.Context, spec channelSpec, settings config.Settings, snapshot inventory.Snapshot) (bool, error) {
-	fetched, err := t.fetchChannel(ctx, spec, settings, snapshot)
+func (t *Tracker) syncFetchedChannel(ctx context.Context, spec channelSpec) (bool, error) {
+	fetched, err := t.fetchChannel(ctx, spec)
 	if err != nil {
 		return false, err
 	}
@@ -40,7 +38,7 @@ func (t *Tracker) SyncChannels(ctx context.Context, channelIDs ...int64) error {
 		ctx = context.Background()
 	}
 
-	specs, settings, snapshot, err := t.collectChannels(channelIDs)
+	specs, err := t.collectChannels(channelIDs)
 	if err != nil {
 		return err
 	}
@@ -71,19 +69,19 @@ func (t *Tracker) SyncChannels(ctx context.Context, channelIDs ...int64) error {
 
 		pendingDrops := make([]channelSpec, 0, len(chunk))
 		for index, response := range responses {
-			result, err := parseGetStreamInfoResponse(chunk[index], response, settings.AvailableDropsCheck)
+			result, err := parseGetStreamInfoResponse(chunk[index], response)
 			if err != nil {
 				t.logger.Warn("跳过无法解析的 GetStreamInfo 响应", "channel_id", chunk[index].ID, "login", chunk[index].Login, "error", err)
 				continue
 			}
 			fetched[chunk[index].ID] = result
-			if result.Stream != nil && settings.AvailableDropsCheck {
+			if result.Stream != nil {
 				pendingDrops = append(pendingDrops, chunk[index])
 			}
 		}
 
 		if len(pendingDrops) > 0 {
-			if err := t.fillDropsEnabledBatch(ctx, pendingDrops, fetched, settings, snapshot); err != nil {
+			if err := t.fillOfferedCampaigns(ctx, pendingDrops, fetched); err != nil {
 				return err
 			}
 		}
@@ -131,12 +129,6 @@ func (t *Tracker) CheckOnline(channelID int64) error {
 			return
 		}
 
-		var (
-			spec     channelSpec
-			settings config.Settings
-			snapshot inventory.Snapshot
-		)
-
 		t.mu.Lock()
 		tracked, ok := t.channels[channelID]
 		if !ok || tracked == nil || tracked.channel == nil || tracked.pendingCancel == nil || tracked.pendingSeq != sequence {
@@ -145,18 +137,16 @@ func (t *Tracker) CheckOnline(channelID int64) error {
 		}
 		tracked.pendingCancel = nil
 		tracked.channel.PendingStream = false
-		spec = channelSpec{
+		spec := channelSpec{
 			ID:          tracked.channel.ID,
 			Login:       tracked.channel.Login,
 			DisplayName: tracked.channel.DisplayName,
 			ACLBased:    tracked.channel.ACLBased,
 			Epoch:       tracked.epoch,
 		}
-		settings = t.settings
-		snapshot = t.inventory
 		t.mu.Unlock()
 
-		_, _ = t.syncFetchedChannel(t.ctx, spec, settings, snapshot)
+		_, _ = t.syncFetchedChannel(t.ctx, spec)
 	}()
 
 	return nil

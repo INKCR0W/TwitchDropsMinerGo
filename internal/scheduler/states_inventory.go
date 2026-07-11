@@ -33,12 +33,8 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.snapshot = snapshot
-	trackerSnapshot, cloneErr := cloneInventorySnapshot(snapshot)
 	s.mu.Unlock()
-	if cloneErr != nil {
-		return fmt.Errorf("复制 tracker inventory 快照失败: %w", cloneErr)
-	}
-	s.tracker.Configure(s.settingsCopy(), trackerSnapshot)
+
 	if err := s.ensureUserTopics(); err != nil {
 		return fmt.Errorf("订阅用户 PubSub topic 失败: %w", err)
 	}

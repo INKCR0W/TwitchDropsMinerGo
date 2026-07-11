@@ -5,19 +5,16 @@ import (
 	"fmt"
 	"strconv"
 
-	"twitchdropsminergo/internal/config"
-	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
-	"twitchdropsminergo/internal/inventory"
 )
 
-func (t *Tracker) lookupChannel(channelID int64) (channelSpec, config.Settings, inventory.Snapshot, error) {
+func (t *Tracker) lookupChannel(channelID int64) (channelSpec, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	tracked, ok := t.channels[channelID]
 	if !ok || tracked == nil || tracked.channel == nil {
-		return channelSpec{}, config.Settings{}, inventory.Snapshot{}, ErrChannelNotTracked
+		return channelSpec{}, ErrChannelNotTracked
 	}
 
 	return channelSpec{
@@ -26,15 +23,13 @@ func (t *Tracker) lookupChannel(channelID int64) (channelSpec, config.Settings, 
 		DisplayName: tracked.channel.DisplayName,
 		ACLBased:    tracked.channel.ACLBased,
 		Epoch:       tracked.epoch,
-	}, t.settings, t.inventory, nil
+	}, nil
 }
 
-func (t *Tracker) collectChannels(channelIDs []int64) ([]channelSpec, config.Settings, inventory.Snapshot, error) {
+func (t *Tracker) collectChannels(channelIDs []int64) ([]channelSpec, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	settings := t.settings
-	snapshot := t.inventory
 	if len(channelIDs) == 0 {
 		specs := make([]channelSpec, 0, len(t.channels))
 		for _, tracked := range t.channels {
@@ -49,14 +44,14 @@ func (t *Tracker) collectChannels(channelIDs []int64) ([]channelSpec, config.Set
 				Epoch:       tracked.epoch,
 			})
 		}
-		return specs, settings, snapshot, nil
+		return specs, nil
 	}
 
 	specs := make([]channelSpec, 0, len(channelIDs))
 	for _, channelID := range channelIDs {
 		tracked, ok := t.channels[channelID]
 		if !ok || tracked == nil || tracked.channel == nil {
-			return nil, config.Settings{}, inventory.Snapshot{}, ErrChannelNotTracked
+			return nil, ErrChannelNotTracked
 		}
 		specs = append(specs, channelSpec{
 			ID:          tracked.channel.ID,
@@ -66,10 +61,10 @@ func (t *Tracker) collectChannels(channelIDs []int64) ([]channelSpec, config.Set
 			Epoch:       tracked.epoch,
 		})
 	}
-	return specs, settings, snapshot, nil
+	return specs, nil
 }
 
-func (t *Tracker) fetchChannel(ctx context.Context, spec channelSpec, settings config.Settings, snapshot inventory.Snapshot) (fetchedChannel, error) {
+func (t *Tracker) fetchChannel(ctx context.Context, spec channelSpec) (fetchedChannel, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -86,12 +81,12 @@ func (t *Tracker) fetchChannel(ctx context.Context, spec channelSpec, settings c
 		return fetchedChannel{}, fmt.Errorf("请求 GetStreamInfo 失败: %w", err)
 	}
 
-	fetched, err := parseGetStreamInfoResponse(spec, response, settings.AvailableDropsCheck)
+	fetched, err := parseGetStreamInfoResponse(spec, response)
 	if err != nil {
 		return fetchedChannel{}, err
 	}
 
-	if fetched.Stream == nil || !settings.AvailableDropsCheck {
+	if fetched.Stream == nil {
 		return fetched, nil
 	}
 
@@ -109,24 +104,16 @@ func (t *Tracker) fetchChannel(ctx context.Context, spec channelSpec, settings c
 
 	campaignIDs, err := parseAvailableDropsResponse(response)
 	if err != nil {
-		// 与网络错误分支一致：AvailableDrops 解析失败时保留已确认的在线 stream，
-		// 而不是丢弃它把在线频道误判为离线。
+		// 保留已确认的在线 stream, 不能因为查不到可推进活动就把频道判为离线
 		t.logger.Warn("解析 AvailableDrops 失败，保留在线状态", "channel_id", spec.ID, "error", err)
 		return fetched, nil
 	}
 
-	channel := &domain.Channel{
-		ID:          spec.ID,
-		Login:       spec.Login,
-		DisplayName: firstNonEmpty(fetched.DisplayName, spec.DisplayName),
-		Stream:      cloneStream(fetched.Stream),
-		ACLBased:    spec.ACLBased,
-	}
-	fetched.Stream.DropsEnabled = dropsEnabled(t.now().UTC(), settings, snapshot, channel, campaignIDs)
+	fetched.Stream.OfferedCampaignIDs = campaignIDs
 	return fetched, nil
 }
 
-func (t *Tracker) fillDropsEnabledBatch(ctx context.Context, specs []channelSpec, fetched map[int64]fetchedChannel, settings config.Settings, snapshot inventory.Snapshot) error {
+func (t *Tracker) fillOfferedCampaigns(ctx context.Context, specs []channelSpec, fetched map[int64]fetchedChannel) error {
 	operations := make([]gql.Operation, 0, len(specs))
 	for _, spec := range specs {
 		operation, err := gql.MustLookup(gql.OperationAvailableDrops).WithVariables(map[string]any{
@@ -140,16 +127,17 @@ func (t *Tracker) fillDropsEnabledBatch(ctx context.Context, specs []channelSpec
 
 	responses, err := t.gqlClient.DoBatch(ctx, operations)
 	if err != nil {
-		return fmt.Errorf("批量请求 AvailableDrops 失败: %w", err)
+		t.logger.Warn("批量请求 AvailableDrops 失败，保留在线状态", "channel_count", len(specs), "error", err)
+		return nil
 	}
 	if len(responses) != len(operations) {
-		return fmt.Errorf("AvailableDrops batch 响应数量不匹配: 请求 %d 个，响应 %d 个", len(operations), len(responses))
+		t.logger.Warn("AvailableDrops batch 响应数量不匹配，保留在线状态", "requested", len(operations), "received", len(responses))
+		return nil
 	}
 
 	for index, response := range responses {
 		campaignIDs, err := parseAvailableDropsResponse(response)
 		if err != nil {
-			// 保留在线状态：解析失败时不覆盖 DropsEnabled，也不丢弃该频道。
 			t.logger.Warn("解析 AvailableDrops 失败，保留在线状态", "channel_id", specs[index].ID, "error", err)
 			continue
 		}
@@ -158,14 +146,7 @@ func (t *Tracker) fillDropsEnabledBatch(ctx context.Context, specs []channelSpec
 		if result.Stream == nil {
 			continue
 		}
-		channel := &domain.Channel{
-			ID:          specs[index].ID,
-			Login:       specs[index].Login,
-			DisplayName: firstNonEmpty(result.DisplayName, specs[index].DisplayName),
-			Stream:      cloneStream(result.Stream),
-			ACLBased:    specs[index].ACLBased,
-		}
-		result.Stream.DropsEnabled = dropsEnabled(t.now().UTC(), settings, snapshot, channel, campaignIDs)
+		result.Stream.OfferedCampaignIDs = campaignIDs
 		fetched[specs[index].ID] = result
 	}
 

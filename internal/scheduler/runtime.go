@@ -181,8 +181,6 @@ func (s *Scheduler) UpdateSettings(settings config.Settings) error {
 	s.settings = cloned
 	s.mu.Unlock()
 
-	trackerSnapshot := s.snapshotCopy()
-	s.tracker.Configure(cloned, trackerSnapshot)
 	s.Reload()
 	return nil
 }

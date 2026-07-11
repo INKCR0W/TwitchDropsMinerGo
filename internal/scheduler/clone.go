@@ -16,6 +16,7 @@ func cloneChannel(channel domain.Channel) domain.Channel {
 			game := *channel.Stream.Game
 			stream.Game = &game
 		}
+		stream.OfferedCampaignIDs = slices.Clone(channel.Stream.OfferedCampaignIDs)
 		cloned.Stream = &stream
 	}
 	return cloned

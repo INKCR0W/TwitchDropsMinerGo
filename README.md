@@ -36,7 +36,6 @@ miner-server --runtime-dir /path/to/runtime
   "priority_mode": "priority_only",
   "smart_priority_safety_minutes": 120,
   "enable_badges_emotes": false,
-  "available_drops_check": false,
   "proxy": ""
 }
 ```

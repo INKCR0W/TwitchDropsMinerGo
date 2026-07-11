@@ -11,11 +11,9 @@ import (
 	"time"
 
 	"twitchdropsminergo/internal/auth"
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/httpclient"
-	"twitchdropsminergo/internal/inventory"
 )
 
 const (
@@ -69,8 +67,6 @@ type Tracker struct {
 	cancel context.CancelFunc
 
 	mu           sync.Mutex
-	settings     config.Settings
-	inventory    inventory.Snapshot
 	channels     map[int64]*trackedChannel
 	epochCounter uint64
 	onChange     func(before, after domain.Channel)
@@ -154,7 +150,6 @@ func NewTracker(options Options) (*Tracker, error) {
 		sleep:        sleep,
 		ctx:          ctx,
 		cancel:       cancel,
-		settings:     config.DefaultSettings(),
 		channels:     make(map[int64]*trackedChannel),
 	}, nil
 }
@@ -199,17 +194,6 @@ func (t *Tracker) Close(ctx context.Context) error {
 	case <-done:
 		return nil
 	}
-}
-
-func (t *Tracker) Configure(settings config.Settings, snapshot inventory.Snapshot) {
-	if t == nil {
-		return
-	}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.settings = settings
-	t.inventory = snapshot
 }
 
 func (t *Tracker) SetChannelChangeHandler(handler func(before, after domain.Channel)) {

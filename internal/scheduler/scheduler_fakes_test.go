@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"twitchdropsminergo/internal/auth"
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/inventory"
@@ -34,27 +33,18 @@ func (f *fakeRefresher) UpdateRewardProgress(progress map[string]rewards.Progres
 }
 
 type fakeTracker struct {
-	mu                 sync.Mutex
-	channels           map[int64]domain.Channel
-	onChange           func(before, after domain.Channel)
-	syncChannelsFunc   func(context.Context, []int64) error
-	sendWatchFunc      func(context.Context, int64) (bool, error)
-	sendCount          int
-	configuredSettings config.Settings
-	configuredSnapshot inventory.Snapshot
+	mu               sync.Mutex
+	channels         map[int64]domain.Channel
+	onChange         func(before, after domain.Channel)
+	syncChannelsFunc func(context.Context, []int64) error
+	sendWatchFunc    func(context.Context, int64) (bool, error)
+	sendCount        int
 }
 
 func newFakeTracker() *fakeTracker {
 	return &fakeTracker{
 		channels: make(map[int64]domain.Channel),
 	}
-}
-
-func (f *fakeTracker) Configure(settings config.Settings, snapshot inventory.Snapshot) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.configuredSettings = settings.Clone()
-	f.configuredSnapshot = snapshot
 }
 
 func (f *fakeTracker) SetChannelChangeHandler(handler func(before, after domain.Channel)) {
