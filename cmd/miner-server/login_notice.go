@@ -22,7 +22,7 @@ func deviceCodeNotifier(logger *slog.Logger, out io.Writer, pendingLoginFile str
 		)
 
 		notice := loginNotice(deviceCode)
-		fmt.Fprint(out, notice)
+		_, _ = fmt.Fprint(out, notice)
 		// 写文件失败不阻断登录, banner 与日志仍可见
 		if err := os.WriteFile(pendingLoginFile, []byte(notice), 0o644); err != nil {
 			logger.Warn("写入待登录提示文件失败", "path", pendingLoginFile, "error", err)
