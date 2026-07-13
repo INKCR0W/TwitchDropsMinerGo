@@ -1,0 +1,12 @@
+services:
+  miner:
+    build: .
+    image: twitchdropsminergo
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./runtime:/data
+    # Linux 上如需宿主机用户直接读 0600 的日志文件,
+    # 先 mkdir -p runtime 再取消注释:
+    # user: "1000:1000"
