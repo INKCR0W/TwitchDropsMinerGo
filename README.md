@@ -22,8 +22,19 @@ miner-server --runtime-dir /path/to/runtime
 | `state/state.json` | 运行时状态快照 |
 | `state/cookies.json` | 持久化认证 cookie |
 | `logs/miner-server.log` | 日志输出 |
+| `pending_login.txt` | 待登录授权提示，登录成功后自动删除 |
 
 日志文件可能包含短期有效的 Device Code 授权提示和运行错误信息。建议将运行目录放在仅当前用户可读写的位置；服务端默认会限制日志文件权限并按大小轮转。
+
+## Docker 部署
+
+```
+docker compose up -d && docker compose logs -f miner
+```
+
+首次运行时日志中会出现登录提示（同时写入 `runtime/pending_login.txt`），在任意设备的浏览器打开提示中的网址并输入代码即可。`pending_login.txt` 消失即登录成功，Ctrl+C 断开日志查看，容器继续运行。
+
+登录态与日志通过 `./runtime` 挂载持久化在宿主机，重启、重建容器均无需再登录。Linux 上如需宿主机用户直接读取日志文件，先 `mkdir -p runtime` 再启用 `compose.yaml` 中注释的 `user:` 配置。
 
 ## 配置
 
