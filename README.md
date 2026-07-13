@@ -32,7 +32,7 @@ miner-server --runtime-dir /path/to/runtime
 docker compose up -d && docker compose logs -f miner
 ```
 
-首次运行时日志中会出现登录提示（同时写入 `runtime/pending_login.txt`），在任意设备的浏览器打开提示中的网址并输入代码即可。`pending_login.txt` 消失即登录成功，Ctrl+C 断开日志查看，容器继续运行。
+首次运行时日志中会出现登录提示（同时写入 `./runtime/pending_login.txt`），在任意设备的浏览器打开提示中的网址并输入代码即可。`pending_login.txt` 消失即登录成功，Ctrl+C 断开日志查看，容器继续运行。
 
 登录态与日志通过 `./runtime` 挂载持久化在宿主机，重启、重建容器均无需再登录。Linux 上如需宿主机用户直接读取日志文件，先 `mkdir -p runtime` 再启用 `compose.yaml` 中注释的 `user:` 配置。
 
