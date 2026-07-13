@@ -134,3 +134,98 @@ jobs:
               --notes-file "$notes_file" \
               -R "$REPOSITORY"
           fi
+
+  docker:
+    name: Publish Docker Images
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      (
+        github.event.workflow_run.head_branch == 'main' ||
+        startsWith(github.event.workflow_run.head_branch, 'v')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          gh run download "$RUN_ID" -R "$REPOSITORY" -n release-metadata -D release-artifacts
+
+      - name: Read publish metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          metadata_path="$(find release-artifacts -type f -name 'release-metadata.env' | head -n 1)"
+          if [[ -z "$metadata_path" ]]; then
+            echo "未找到 release metadata" >&2
+            exit 1
+          fi
+
+          read_meta() {
+            local line
+            line="$(grep -m1 "^${1}=" "$metadata_path" || true)"
+            printf '%s' "${line#*=}"
+          }
+          EVENT_NAME="$(read_meta EVENT_NAME)"
+          ASSET_CHANNEL="$(read_meta ASSET_CHANNEL)"
+          RELEASE_KIND="$(read_meta RELEASE_KIND)"
+          RELEASE_TAG="$(read_meta RELEASE_TAG)"
+          SOURCE_SHA="$(read_meta SOURCE_SHA)"
+
+          if [[ "${EVENT_NAME:-}" != "push" ]]; then
+            echo "拒绝发布非 push 事件产物: EVENT_NAME=${EVENT_NAME:-}" >&2
+            exit 1
+          fi
+          if [[ "${ASSET_CHANNEL:-}" == pr-* ]]; then
+            echo "拒绝发布 PR 产物: ASSET_CHANNEL=${ASSET_CHANNEL:-}" >&2
+            exit 1
+          fi
+          if [[ -z "${SOURCE_SHA:-}" ]]; then
+            echo "缺少 SOURCE_SHA" >&2
+            exit 1
+          fi
+
+          image="inkcrow/twitchdropsminergo"
+          if [[ "$RELEASE_KIND" == "release" ]]; then
+            tags="${image}:latest,${image}:${RELEASE_TAG}"
+          else
+            tags="${image}:edge"
+          fi
+
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.meta.outputs.source_sha }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
