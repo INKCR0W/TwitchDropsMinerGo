@@ -92,6 +92,8 @@ func run(args []string) int {
 		}
 	}()
 
+	clearPendingLogin(logger, layout.PendingLoginFile)()
+
 	stateStore := storage.NewJSONFile(layout.StateFile, app.DefaultRuntimeState())
 	application, err := app.New(app.Options{
 		Logger:     logger,
@@ -120,9 +122,10 @@ func run(args []string) int {
 	}()
 
 	authState, err := auth.New(auth.Options{
-		HTTPClient:        httpClient,
-		ClientInfo:        clientInfo,
-		DeviceCodeHandler: logDeviceCode(logger),
+		HTTPClient:           httpClient,
+		ClientInfo:           clientInfo,
+		DeviceCodeHandler:    deviceCodeNotifier(logger, os.Stdout, layout.PendingLoginFile),
+		AuthenticatedHandler: clearPendingLogin(logger, layout.PendingLoginFile),
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化认证状态失败", err)
@@ -270,17 +273,4 @@ func failRun(application *app.App, logger *slog.Logger, message string, err erro
 		}
 	}
 	return 1
-}
-
-func logDeviceCode(logger *slog.Logger) auth.DeviceCodeHandler {
-	return func(_ context.Context, deviceCode auth.DeviceCode) error {
-		logger.Info(
-			"需要完成 Twitch Device Code 授权",
-			"user_code", deviceCode.UserCode,
-			"verification_uri", deviceCode.VerificationURI,
-			"expires_at", deviceCode.ExpiresAt.UTC(),
-			"interval", deviceCode.Interval.String(),
-		)
-		return nil
-	}
 }
