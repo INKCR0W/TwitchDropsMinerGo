@@ -84,3 +84,59 @@ func TestStateValidateRestoresTokenFromCookie(t *testing.T) {
 		t.Fatalf("调用次数不匹配: home=%d device=%d token=%d validate=%d", homeHits.Load(), deviceHits.Load(), tokenHits.Load(), validateHits.Load())
 	}
 }
+
+func TestStateValidateCookieRestoreInvokesAuthenticatedHandler(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte("ok"))
+		case "/oauth2/validate":
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"client_id": "client-restore",
+				"user_id":   "77",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	clientInfo := httpclient.ClientInfo{
+		ClientURL: server.URL,
+		ClientID:  "client-restore",
+		UserAgent: "unit-test-agent",
+	}
+	client, _ := newTestAuthHTTPClient(t, clientInfo)
+	client.CookieJar().SetCookies(mustParseURL(t, server.URL), []*http.Cookie{
+		{Name: "auth-token", Value: "restored-token", Path: "/"},
+		{Name: "unique_id", Value: "restored-device", Path: "/"},
+	})
+	if err := client.CookieJar().Save(); err != nil {
+		t.Fatalf("保存预置 Cookie 失败: %v", err)
+	}
+
+	var calls int
+	state, err := New(Options{
+		HTTPClient:       client,
+		ClientInfo:       clientInfo,
+		DeviceEndpoint:   server.URL + "/oauth2/device",
+		TokenEndpoint:    server.URL + "/oauth2/token",
+		ValidateEndpoint: server.URL + "/oauth2/validate",
+		SessionIDGenerator: func() (string, error) {
+			return "fedcba9876543210", nil
+		},
+		AuthenticatedHandler: func() { calls++ },
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	if err := state.Validate(context.Background()); err != nil {
+		t.Fatalf("Validate 返回错误: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("AuthenticatedHandler 调用次数不匹配: %d", calls)
+	}
+}

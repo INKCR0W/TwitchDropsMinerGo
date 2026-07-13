@@ -48,3 +48,16 @@ func TestStateValidatePerformsDeviceCodeLoginAndPersistsSession(t *testing.T) {
 		t.Fatalf("persistent 未持久化: %#v", cookies)
 	}
 }
+
+func TestValidateDeviceFlowInvokesAuthenticatedHandler(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	newValidatedDeviceCodeState(t, func(options *Options) {
+		options.AuthenticatedHandler = func() { calls++ }
+	})
+
+	if calls != 1 {
+		t.Fatalf("AuthenticatedHandler 调用次数不匹配: %d", calls)
+	}
+}

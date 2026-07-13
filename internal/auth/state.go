@@ -30,16 +30,17 @@ type Snapshot struct {
 }
 
 type Options struct {
-	HTTPClient         *httpclient.Client
-	ClientInfo         httpclient.ClientInfo
-	DeviceEndpoint     string
-	TokenEndpoint      string
-	ValidateEndpoint   string
-	Clock              func() time.Time
-	Sleep              func(context.Context, time.Duration) error
-	SessionIDGenerator func() (string, error)
-	DeviceCodeHandler  DeviceCodeHandler
-	RevalidateInterval time.Duration
+	HTTPClient           *httpclient.Client
+	ClientInfo           httpclient.ClientInfo
+	DeviceEndpoint       string
+	TokenEndpoint        string
+	ValidateEndpoint     string
+	Clock                func() time.Time
+	Sleep                func(context.Context, time.Duration) error
+	SessionIDGenerator   func() (string, error)
+	DeviceCodeHandler    DeviceCodeHandler
+	AuthenticatedHandler func()
+	RevalidateInterval   time.Duration
 }
 
 type State struct {
@@ -53,6 +54,7 @@ type State struct {
 	sleep              func(context.Context, time.Duration) error
 	generateSession    func() (string, error)
 	onDeviceCode       DeviceCodeHandler
+	onAuthenticated    func()
 	revalidateInterval time.Duration
 
 	validateMu      sync.Mutex
@@ -131,6 +133,7 @@ func New(options Options) (*State, error) {
 		sleep:              sleep,
 		generateSession:    generateSession,
 		onDeviceCode:       options.DeviceCodeHandler,
+		onAuthenticated:    options.AuthenticatedHandler,
 		revalidateInterval: revalidateInterval,
 	}, nil
 }

@@ -113,6 +113,10 @@ func (s *State) ensureAuthenticated(ctx context.Context) error {
 		return fmt.Errorf("保存认证 Cookie 失败: %w", err)
 	}
 
+	if s.onAuthenticated != nil {
+		s.onAuthenticated()
+	}
+
 	return nil
 }
 

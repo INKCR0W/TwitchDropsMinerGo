@@ -27,7 +27,7 @@ type validatedDeviceCodeState struct {
 	validateHits  int32
 }
 
-func newValidatedDeviceCodeState(t *testing.T) validatedDeviceCodeState {
+func newValidatedDeviceCodeState(t *testing.T, mutate ...func(*Options)) validatedDeviceCodeState {
 	t.Helper()
 
 	var homeHits atomic.Int32
@@ -98,7 +98,7 @@ func newValidatedDeviceCodeState(t *testing.T) validatedDeviceCodeState {
 	}
 	client, cookiesPath := newTestAuthHTTPClient(t, clientInfo)
 
-	state, err := New(Options{
+	options := Options{
 		HTTPClient:       client,
 		ClientInfo:       clientInfo,
 		DeviceEndpoint:   server.URL + "/oauth2/device",
@@ -115,7 +115,12 @@ func newValidatedDeviceCodeState(t *testing.T) validatedDeviceCodeState {
 			announcedCode = code
 			return nil
 		},
-	})
+	}
+	for _, mutateOptions := range mutate {
+		mutateOptions(&options)
+	}
+
+	state, err := New(options)
 	if err != nil {
 		t.Fatalf("New 返回错误: %v", err)
 	}
