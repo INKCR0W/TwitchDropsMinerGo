@@ -32,7 +32,7 @@ miner-server --runtime-dir /path/to/runtime
 
 ```
 mkdir tdm && cd tdm
-curl -LO https://raw.githubusercontent.com/INKCR0W/TwitchDropsMinerGo/main/deploy/compose.yaml
+curl -fLO https://raw.githubusercontent.com/INKCR0W/TwitchDropsMinerGo/main/deploy/compose.yaml
 docker compose up -d && docker compose logs -f miner
 ```
 

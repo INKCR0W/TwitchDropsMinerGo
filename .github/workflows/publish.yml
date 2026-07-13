@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-publish
+  group: release-publish-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
@@ -226,6 +226,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
