@@ -33,7 +33,8 @@ func main() {
 }
 
 type cliOptions struct {
-	RuntimeDir string
+	RuntimeDir  string
+	Healthcheck bool
 }
 
 func run(args []string) int {
@@ -41,6 +42,10 @@ func run(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
 		return 2
+	}
+
+	if options.Healthcheck {
+		return runHealthcheck(options.RuntimeDir)
 	}
 
 	layout, err := runtime.ResolveLayout(options.RuntimeDir)
@@ -237,6 +242,7 @@ func parseArgs(args []string) (cliOptions, error) {
 	flagSet := flag.NewFlagSet("miner-server", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	flagSet.StringVar(&options.RuntimeDir, "runtime-dir", runtime.DefaultRootDir, "运行目录")
+	flagSet.BoolVar(&options.Healthcheck, "healthcheck", false, "健康检查模式")
 
 	if err := flagSet.Parse(args); err != nil {
 		return cliOptions{}, err
