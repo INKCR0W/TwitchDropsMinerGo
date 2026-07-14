@@ -100,7 +100,6 @@ func TestUpdateObservationPersistsAndClonesSnapshot(t *testing.T) {
 		},
 	}
 	observation.Settings = config.DefaultSettings()
-	observation.Settings.Language = "简体中文"
 	observation.Settings.Proxy = "http://user:pass@proxy.example.com:8080"
 
 	if err := application.UpdateObservation(observation); err != nil {

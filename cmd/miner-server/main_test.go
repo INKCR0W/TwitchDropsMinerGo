@@ -29,7 +29,6 @@ func TestBuildRuntimeObservationMapsSnapshots(t *testing.T) {
 
 	now := time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC)
 	settings := config.DefaultSettings()
-	settings.Language = "简体中文"
 	settings.Proxy = "http://user:pass@proxy.example.com:8080"
 
 	campaign, err := domain.NewCampaign(domain.CampaignSpec{
@@ -119,7 +118,6 @@ func TestLocalStateSyncPersistsObservation(t *testing.T) {
 
 	now := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
 	settings := config.DefaultSettings()
-	settings.Language = "简体中文"
 	settings.Proxy = "http://user:pass@proxy.example.com:8080"
 	target := &stubLocalStateTarget{
 		settings: settings,

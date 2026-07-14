@@ -153,7 +153,7 @@ func TestNewLoadsSettingsFromStore(t *testing.T) {
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Settings: &memorySettingsStore{
 			settings: config.Settings{
-				Language: "简体中文",
+				Proxy: "http://proxy.example.com:8080",
 			},
 		},
 	})
@@ -161,7 +161,7 @@ func TestNewLoadsSettingsFromStore(t *testing.T) {
 		t.Fatalf("New 返回错误: %v", err)
 	}
 
-	if got := application.Settings().Language; got != "简体中文" {
+	if got := application.Settings().Proxy; got != "http://proxy.example.com:8080" {
 		t.Fatalf("Settings 未装载外部配置: %q", got)
 	}
 }

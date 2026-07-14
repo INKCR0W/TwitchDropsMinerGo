@@ -46,13 +46,9 @@ type FileStore struct {
 
 type Settings struct {
 	Proxy              string       `json:"proxy"`
-	Language           string       `json:"language"`
-	DarkMode           bool         `json:"dark_mode"`
 	Exclude            []string     `json:"exclude"`
 	Priority           []string     `json:"priority"`
-	AutostartTray      bool         `json:"autostart_tray"`
 	ConnectionQuality  int          `json:"connection_quality"`
-	TrayNotifications  bool         `json:"tray_notifications"`
 	EnableBadgesEmotes bool         `json:"enable_badges_emotes"`
 	PriorityMode       PriorityMode `json:"priority_mode"`
 
@@ -63,11 +59,9 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{
-		Language:                   "English",
 		Exclude:                    []string{},
 		Priority:                   []string{},
 		ConnectionQuality:          1,
-		TrayNotifications:          true,
 		PriorityMode:               PriorityOnly,
 		SmartPrioritySafetyMinutes: DefaultSmartPrioritySafetyMinutes,
 		WatchStallMinutes:          DefaultWatchStallMinutes,
@@ -101,13 +95,9 @@ func (s Settings) Sanitized() Settings {
 
 func (s Settings) IsZero() bool {
 	return s.Proxy == "" &&
-		s.Language == "" &&
-		!s.DarkMode &&
 		len(s.Exclude) == 0 &&
 		len(s.Priority) == 0 &&
-		!s.AutostartTray &&
 		s.ConnectionQuality == 0 &&
-		!s.TrayNotifications &&
 		!s.EnableBadgesEmotes &&
 		s.PriorityMode == "" &&
 		s.SmartPrioritySafetyMinutes == 0 &&
@@ -156,11 +146,6 @@ func (s *Settings) Validate() error {
 	}
 
 	defaults := DefaultSettings()
-
-	s.Language = strings.TrimSpace(s.Language)
-	if s.Language == "" {
-		s.Language = defaults.Language
-	}
 
 	s.Proxy = strings.TrimSpace(s.Proxy)
 	if s.Proxy != "" {

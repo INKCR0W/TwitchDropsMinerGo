@@ -44,7 +44,6 @@ func TestLoadAppliesFileOverridesAndDefaults(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "settings.json")
 	input := map[string]any{
-		"language":           "简体中文",
 		"connection_quality": 3,
 		"priority":           []string{"A", "A", "B", ""},
 		"exclude":            []string{"X", "X", "  "},
@@ -64,10 +63,6 @@ func TestLoadAppliesFileOverridesAndDefaults(t *testing.T) {
 		t.Fatalf("Load 返回错误: %v", err)
 	}
 
-	if settings.Language != "简体中文" {
-		t.Fatalf("Language 不匹配: %q", settings.Language)
-	}
-
 	if settings.ConnectionQuality != 3 {
 		t.Fatalf("ConnectionQuality 不匹配: %d", settings.ConnectionQuality)
 	}
@@ -82,10 +77,6 @@ func TestLoadAppliesFileOverridesAndDefaults(t *testing.T) {
 
 	if settings.PriorityMode != PriorityOnly {
 		t.Fatalf("PriorityMode 默认值错误: %q", settings.PriorityMode)
-	}
-
-	if !settings.TrayNotifications {
-		t.Fatal("TrayNotifications 默认值应为 true")
 	}
 
 	if settings.Log.Level != "debug" || settings.Log.Format != "json" || settings.Log.FileEnabled {
@@ -179,7 +170,7 @@ func TestFileStoreLoadsAndSavesSettings(t *testing.T) {
 	store := NewFileStore(path)
 
 	settings := DefaultSettings()
-	settings.Language = "简体中文"
+	settings.Priority = []string{"Game A"}
 
 	if err := store.Save(settings); err != nil {
 		t.Fatalf("Save 返回错误: %v", err)
@@ -189,7 +180,7 @@ func TestFileStoreLoadsAndSavesSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load 返回错误: %v", err)
 	}
-	if loaded.Language != "简体中文" {
+	if len(loaded.Priority) != 1 || loaded.Priority[0] != "Game A" {
 		t.Fatalf("Load 未返回保存后的配置: %#v", loaded)
 	}
 }
