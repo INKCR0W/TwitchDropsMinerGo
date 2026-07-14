@@ -13,7 +13,10 @@ import (
 	"twitchdropsminergo/internal/scheduler"
 )
 
-const defaultStateSyncInterval = time.Second
+const (
+	defaultStateSyncInterval = time.Second
+	unhealthyErrorThreshold  = 5 * time.Minute
+)
 
 type localStateTarget interface {
 	Settings() config.Settings
@@ -107,8 +110,12 @@ func buildRuntimeObservation(settings config.Settings, authSnapshot auth.Snapsho
 		_ = effectiveSettings.Validate()
 	}
 
+	healthy := authSnapshot.UserID > 0 &&
+		(schedulerSnapshot.LastError == "" || now.Sub(schedulerSnapshot.ErrorSince) < unhealthyErrorThreshold)
+
 	observation := app.Observation{
-		Healthy: true,
+		Healthy:   healthy,
+		Heartbeat: now.Truncate(time.Minute),
 		Auth: app.AuthStatus{
 			LoggedIn: authSnapshot.UserID > 0,
 			UserID:   authSnapshot.UserID,
@@ -120,6 +127,8 @@ func buildRuntimeObservation(settings config.Settings, authSnapshot auth.Snapsho
 			SelectedChannelID:      schedulerSnapshot.SelectedChannelID,
 			FullCleanup:            schedulerSnapshot.FullCleanup,
 			LastProgressAt:         schedulerSnapshot.LastProgressAt,
+			LastError:              schedulerSnapshot.LastError,
+			ErrorSince:             schedulerSnapshot.ErrorSince,
 			ChannelCount:           len(schedulerSnapshot.Channels),
 			Channels:               convertChannels(schedulerSnapshot.Channels),
 			InventoryCampaignCount: schedulerSnapshot.InventoryCampaignCount,

@@ -87,3 +87,15 @@ func (s *concurrencyCheckingStateStore) Save(state RuntimeState) error {
 	s.mu.Unlock()
 	return nil
 }
+
+type countingStateStore struct {
+	state     RuntimeState
+	saveCount int
+}
+
+func (s *countingStateStore) Load() (RuntimeState, error) { return s.state, nil }
+func (s *countingStateStore) Save(state RuntimeState) error {
+	s.state = state
+	s.saveCount++
+	return nil
+}

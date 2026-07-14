@@ -200,3 +200,37 @@ func TestStateSavesAreSerialized(t *testing.T) {
 		t.Fatal("状态写盘应串行执行")
 	}
 }
+
+func TestUpdateObservationHeartbeatTriggersPeriodicSave(t *testing.T) {
+	t.Parallel()
+
+	store := &countingStateStore{}
+	application, err := New(Options{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		StateStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	observation := Observation{Healthy: true, Heartbeat: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)}
+	if err := application.UpdateObservation(observation); err != nil {
+		t.Fatalf("UpdateObservation 返回错误: %v", err)
+	}
+	saved := store.saveCount
+
+	if err := application.UpdateObservation(observation); err != nil {
+		t.Fatalf("UpdateObservation 返回错误: %v", err)
+	}
+	if store.saveCount != saved {
+		t.Fatal("同一分钟内容不变不应重复落盘")
+	}
+
+	observation.Heartbeat = observation.Heartbeat.Add(time.Minute)
+	if err := application.UpdateObservation(observation); err != nil {
+		t.Fatalf("UpdateObservation 返回错误: %v", err)
+	}
+	if store.saveCount != saved+1 {
+		t.Fatal("心跳跨分钟应触发一次落盘")
+	}
+}

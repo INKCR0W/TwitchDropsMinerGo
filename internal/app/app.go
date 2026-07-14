@@ -31,6 +31,7 @@ type RuntimeState struct {
 	LastStartedAt time.Time       `json:"last_started_at,omitempty"`
 	LastStoppedAt time.Time       `json:"last_stopped_at,omitempty"`
 	UpdatedAt     time.Time       `json:"updated_at,omitempty"`
+	HeartbeatAt   time.Time       `json:"heartbeat_at,omitempty"`
 	Auth          AuthStatus      `json:"auth"`
 	Schedule      ScheduleStatus  `json:"schedule"`
 	Settings      config.Settings `json:"settings"`
@@ -240,6 +241,7 @@ func (a *App) UpdateObservation(observation Observation) error {
 	next.SchemaVersion = stateSchemaVersion
 	next.Healthy = normalized.Healthy
 	next.LastError = strings.TrimSpace(normalized.LastError)
+	next.HeartbeatAt = normalized.Heartbeat
 	next.Auth = normalized.Auth
 	next.Schedule = normalized.Schedule
 	next.Settings = normalized.Settings

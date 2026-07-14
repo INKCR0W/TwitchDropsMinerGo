@@ -223,3 +223,42 @@ func TestLocalStateSyncContinuesAfterWriteError(t *testing.T) {
 		t.Fatalf("取消后应正常退出，实际: %v", err)
 	}
 }
+
+func TestBuildRuntimeObservationHealth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 14, 12, 0, 30, 0, time.UTC)
+	loggedIn := auth.Snapshot{UserID: 42}
+
+	cases := []struct {
+		name     string
+		auth     auth.Snapshot
+		snapshot scheduler.StatusSnapshot
+		healthy  bool
+	}{
+		{name: "未登录立即不健康", auth: auth.Snapshot{}, healthy: false},
+		{name: "无错误健康", auth: loggedIn, healthy: true},
+		{name: "错误未超阈值仍健康", auth: loggedIn, snapshot: scheduler.StatusSnapshot{
+			LastError: "抖动", ErrorSince: now.Add(-time.Minute),
+		}, healthy: true},
+		{name: "错误超阈值不健康", auth: loggedIn, snapshot: scheduler.StatusSnapshot{
+			LastError: "持续失败", ErrorSince: now.Add(-6 * time.Minute),
+		}, healthy: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			observation := buildRuntimeObservation(config.DefaultSettings(), tc.auth, tc.snapshot, nil, now)
+			if observation.Healthy != tc.healthy {
+				t.Fatalf("Healthy 不匹配: got %v want %v", observation.Healthy, tc.healthy)
+			}
+			if !observation.Heartbeat.Equal(now.Truncate(time.Minute)) {
+				t.Fatalf("Heartbeat 应截断到分钟: %v", observation.Heartbeat)
+			}
+			if observation.Schedule.LastError != tc.snapshot.LastError {
+				t.Fatalf("LastError 未透传: %q", observation.Schedule.LastError)
+			}
+		})
+	}
+}

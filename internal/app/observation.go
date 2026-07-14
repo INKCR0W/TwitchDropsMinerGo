@@ -9,6 +9,7 @@ import (
 type Observation struct {
 	Healthy   bool
 	LastError string
+	Heartbeat time.Time
 	Auth      AuthStatus
 	Schedule  ScheduleStatus
 	Settings  config.Settings
@@ -26,6 +27,8 @@ type ScheduleStatus struct {
 	SelectedChannelID      int64           `json:"selected_channel_id,omitempty"`
 	FullCleanup            bool            `json:"full_cleanup"`
 	LastProgressAt         time.Time       `json:"last_progress_at,omitempty"`
+	LastError              string          `json:"last_error,omitempty"`
+	ErrorSince             time.Time       `json:"error_since,omitempty"`
 	ChannelCount           int             `json:"channel_count"`
 	Channels               []ChannelStatus `json:"channels,omitempty"`
 	InventoryCampaignCount int             `json:"inventory_campaign_count"`
