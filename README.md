@@ -53,7 +53,7 @@ docker compose up -d && docker compose logs -f miner
 
 ## 配置
 
-`settings.json` 主要字段：
+`settings.json` 首次运行自动生成，完整字段：
 
 ```json
 {
@@ -62,13 +62,47 @@ docker compose up -d && docker compose logs -f miner
   "priority_mode": "priority_only",
   "smart_priority_safety_minutes": 120,
   "enable_badges_emotes": false,
-  "proxy": ""
+  "proxy": "",
+  "connection_quality": 1,
+  "watch_stall_minutes": 10,
+  "log": {
+    "level": "info",
+    "format": "text",
+    "file_enabled": true,
+    "add_source": false,
+    "max_size_bytes": 10485760,
+    "max_backups": 3
+  }
 }
 ```
 
-`priority_mode` 可选值：`priority_only`、`ending_soonest`、`low_availability_first`、`smart_balance`。
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `priority` | `[]` | 优先游戏名列表，有序 |
+| `exclude` | `[]` | 永不挖的游戏名列表，优先级高于一切 |
+| `priority_mode` | `priority_only` | 选台策略，见下 |
+| `smart_priority_safety_minutes` | `120` | 仅 `smart_balance` 生效，见下 |
+| `enable_badges_emotes` | `false` | 是否挖只送徽章/表情（无实体 Drop 道具）的活动 |
+| `proxy` | `""` | 代理 URL（HTTP 与 PubSub WebSocket 均生效），须含协议和主机 |
+| `connection_quality` | `1` | 网络质量系数 1–6：连接超时 = 5s × 该值，请求超时 = 10s × 该值，网络差调大 |
+| `watch_stall_minutes` | `10` | 观看正常但 drop 进度连续该分钟数无增长时，判定频道卡死，回避 30 分钟并切台 |
+| `log.level` | `info` | `debug` / `info` / `warn` / `error` |
+| `log.format` | `text` | `text` 或 `json`，stdout 与文件同格式 |
+| `log.file_enabled` | `true` | 除 stdout 外同时写 `logs/miner-server.log` |
+| `log.add_source` | `false` | 日志行附带源码位置 |
+| `log.max_size_bytes` | `10485760` | 单文件轮转阈值，与 `max_backups` 任一为 0 则不轮转 |
+| `log.max_backups` | `3` | 轮转保留的旧日志份数 |
+
+`priority_mode` 可选值：
+
+- `priority_only` —— 只挖 `priority` 列表中的游戏，按列表顺序
+- `ending_soonest` —— 全局按活动最早结束优先
+- `low_availability_first` —— 可用频道少的活动优先
+- `smart_balance` —— 按 `priority` 挖，但允许紧急的非 priority 活动在安全前提下插队
 
 `smart_priority_safety_minutes`（默认 120）仅在 `smart_balance` 模式下生效：只有当 `priority` 列表中每个可挖游戏的富余时间（距结束时间减去还需观看的分钟数，按活动内最紧的 drop 计）都不低于该值时，才允许更紧急的非 priority 游戏插队。这样 priority 游戏可以晚挖，但不会因插队而来不及完成；调小该值会更容易让位给紧急的非 priority 活动。
+
+配置修改后重启生效（Docker 部署：`docker compose restart`）。
 
 ## 致谢
 
