@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 func (s *Scheduler) Run(ctx context.Context) error {
@@ -107,6 +108,9 @@ func (s *Scheduler) handleRuntimeError(ctx context.Context, state State, err err
 		"retry_delay", s.errorRetryDelay.String(),
 	)
 	s.mu.Lock()
+	if s.lastRuntimeError == nil {
+		s.runtimeErrorSince = s.now().UTC()
+	}
 	s.lastRuntimeError = err
 	s.mu.Unlock()
 
@@ -120,6 +124,7 @@ func (s *Scheduler) handleRuntimeError(ctx context.Context, state State, err err
 func (s *Scheduler) clearRuntimeError() {
 	s.mu.Lock()
 	s.lastRuntimeError = nil
+	s.runtimeErrorSince = time.Time{}
 	s.mu.Unlock()
 }
 

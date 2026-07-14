@@ -145,6 +145,10 @@ func (s *Scheduler) StatusSnapshot() StatusSnapshot {
 	for _, channel := range s.channels {
 		status.Channels = append(status.Channels, cloneChannel(channel))
 	}
+	if s.lastRuntimeError != nil {
+		status.LastError = s.lastRuntimeError.Error()
+		status.ErrorSince = s.runtimeErrorSince
+	}
 	s.mu.RUnlock()
 
 	sort.Slice(status.Channels, func(i, j int) bool {

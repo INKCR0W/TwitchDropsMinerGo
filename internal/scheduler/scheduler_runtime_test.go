@@ -166,6 +166,8 @@ func TestStatusSnapshotIncludesSchedulerAndPubSubState(t *testing.T) {
 			},
 		},
 	}
+	scheduler.lastRuntimeError = errors.New("模拟调度错误")
+	scheduler.runtimeErrorSince = time.Date(2026, 7, 14, 11, 0, 0, 0, time.UTC)
 
 	status := scheduler.StatusSnapshot()
 	if status.State != StateChannelSwitch {
@@ -179,6 +181,12 @@ func TestStatusSnapshotIncludesSchedulerAndPubSubState(t *testing.T) {
 	}
 	if len(status.Channels) != 1 || status.Channels[0].ID != 20 {
 		t.Fatalf("频道快照不匹配: %#v", status.Channels)
+	}
+	if status.LastError != "模拟调度错误" {
+		t.Fatalf("LastError 不匹配: %q", status.LastError)
+	}
+	if !status.ErrorSince.Equal(time.Date(2026, 7, 14, 11, 0, 0, 0, time.UTC)) {
+		t.Fatalf("ErrorSince 不匹配: %v", status.ErrorSince)
 	}
 }
 

@@ -119,6 +119,8 @@ type StatusSnapshot struct {
 	SelectedChannelID      int64
 	FullCleanup            bool
 	LastProgressAt         time.Time
+	LastError              string
+	ErrorSince             time.Time
 	Channels               []domain.Channel
 	InventoryCampaignCount int
 	InventoryDropCount     int
@@ -161,6 +163,7 @@ type Scheduler struct {
 	stalledChannels          map[int64]time.Time
 	announcedProgressDropIDs map[string]struct{}
 	lastRuntimeError         error
+	runtimeErrorSince        time.Time
 	maintenanceCancel        context.CancelFunc
 	userTopicUserID          int64
 
