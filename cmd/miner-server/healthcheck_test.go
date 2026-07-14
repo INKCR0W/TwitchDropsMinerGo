@@ -1,12 +1,14 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"twitchdropsminergo/internal/app"
+	"twitchdropsminergo/internal/runtime"
 )
 
 func TestHealthcheckState(t *testing.T) {
@@ -36,6 +38,10 @@ func TestHealthcheckState(t *testing.T) {
 			s.Healthy = false
 			s.Schedule.LastError = "持续失败"
 		}, wantErr: "持续失败"},
+		{name: "顶层错误兜底", mutate: func(s *app.RuntimeState) {
+			s.Healthy = false
+			s.LastError = "启动失败"
+		}, wantErr: "启动失败"},
 	}
 
 	for _, tc := range cases {
@@ -62,5 +68,25 @@ func TestRunHealthcheckMissingStateFile(t *testing.T) {
 
 	if code := runHealthcheck(filepath.Join(t.TempDir(), "runtime")); code != 1 {
 		t.Fatalf("状态文件缺失应返回 1: %d", code)
+	}
+}
+
+func TestRunHealthcheckCorruptStateFile(t *testing.T) {
+	t.Parallel()
+
+	runtimeDir := filepath.Join(t.TempDir(), "runtime")
+	layout, err := runtime.ResolveLayout(runtimeDir)
+	if err != nil {
+		t.Fatalf("解析运行目录失败: %v", err)
+	}
+	if err := os.MkdirAll(layout.StateDir, 0o755); err != nil {
+		t.Fatalf("创建状态目录失败: %v", err)
+	}
+	if err := os.WriteFile(layout.StateFile, []byte("不是合法的 JSON"), 0o644); err != nil {
+		t.Fatalf("写入状态文件失败: %v", err)
+	}
+
+	if code := runHealthcheck(runtimeDir); code != 1 {
+		t.Fatalf("状态文件损坏应返回 1: %d", code)
 	}
 }

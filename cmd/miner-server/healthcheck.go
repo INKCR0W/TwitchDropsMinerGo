@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -21,6 +22,9 @@ func runHealthcheck(runtimeDir string) int {
 	}
 
 	raw, err := os.ReadFile(layout.StateFile)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		raw, err = os.ReadFile(layout.StateFile + ".bak")
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "读取状态文件失败: %v\n", err)
 		return 1
@@ -57,5 +61,5 @@ func healthcheckState(state app.RuntimeState, now time.Time) error {
 	if reason == "" {
 		reason = "未知原因"
 	}
-	return fmt.Errorf("unhealthy: %s", reason)
+	return fmt.Errorf("不健康: %s", reason)
 }
