@@ -146,7 +146,9 @@ func (t *Tracker) CheckOnline(channelID int64) error {
 		}
 		t.mu.Unlock()
 
-		_, _ = t.syncFetchedChannel(t.ctx, spec)
+		if _, err := t.syncFetchedChannel(t.ctx, spec); err != nil {
+			t.logger.Warn("检查频道上线失败", "channel_id", spec.ID, "channel_login", spec.Login, "error", err)
+		}
 	}()
 
 	return nil
