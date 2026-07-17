@@ -20,12 +20,12 @@ func TestEnsureFileAddsMissingKeys(t *testing.T) {
 		t.Fatalf("Load 返回错误: %v", err)
 	}
 
-	rewrote, err := EnsureFile(path, loaded)
+	outcome, err := EnsureFile(path, loaded)
 	if err != nil {
 		t.Fatalf("EnsureFile 返回错误: %v", err)
 	}
-	if !rewrote {
-		t.Fatal("缺键文件应触发重写")
+	if outcome != EnsureUpdated {
+		t.Fatalf("缺键文件应触发更新, outcome=%d", outcome)
 	}
 
 	data, err := os.ReadFile(path)
@@ -56,12 +56,12 @@ func TestEnsureFileNoRewriteWhenCanonical(t *testing.T) {
 		t.Fatalf("Save 返回错误: %v", err)
 	}
 
-	rewrote, err := EnsureFile(path, DefaultSettings())
+	outcome, err := EnsureFile(path, DefaultSettings())
 	if err != nil {
 		t.Fatalf("EnsureFile 返回错误: %v", err)
 	}
-	if rewrote {
-		t.Fatal("已规范文件不应重写")
+	if outcome != EnsureUnchanged {
+		t.Fatalf("已规范文件不应重写, outcome=%d", outcome)
 	}
 	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
 		t.Fatalf("不应产生 .bak 备份, stat err=%v", err)
@@ -79,16 +79,16 @@ func TestEnsureFileNormalizesBeforeCompare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("首次 EnsureFile 返回错误: %v", err)
 	}
-	if !first {
-		t.Fatal("文件不存在时应写入")
+	if first != EnsureCreated {
+		t.Fatalf("文件不存在时应创建, outcome=%d", first)
 	}
 
 	second, err := EnsureFile(path, settings)
 	if err != nil {
 		t.Fatalf("二次 EnsureFile 返回错误: %v", err)
 	}
-	if second {
-		t.Fatal("未归一化输入重复调用不应再次重写")
+	if second != EnsureUnchanged {
+		t.Fatalf("未归一化输入重复调用不应再次重写, outcome=%d", second)
 	}
 }
 

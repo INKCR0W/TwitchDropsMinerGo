@@ -154,26 +154,38 @@ func writeSettings(path string, settings Settings) error {
 	return nil
 }
 
-func EnsureFile(path string, settings Settings) (bool, error) {
+type EnsureOutcome int
+
+const (
+	EnsureUnchanged EnsureOutcome = iota
+	EnsureCreated
+	EnsureUpdated
+)
+
+func EnsureFile(path string, settings Settings) (EnsureOutcome, error) {
 	if err := settings.Validate(); err != nil {
-		return false, err
+		return EnsureUnchanged, err
 	}
 
 	want, err := storage.MarshalJSONFile(settings)
 	if err != nil {
-		return false, fmt.Errorf("序列化配置失败: %w", err)
+		return EnsureUnchanged, fmt.Errorf("序列化配置失败: %w", err)
 	}
 
 	current, err := os.ReadFile(path)
 	if err == nil && bytes.Equal(current, want) {
-		return false, nil
+		return EnsureUnchanged, nil
 	}
 	if err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("读取配置文件失败: %w", err)
+		return EnsureUnchanged, fmt.Errorf("读取配置文件失败: %w", err)
 	}
 
+	existed := err == nil
 	if err := writeSettings(path, settings); err != nil {
-		return false, err
+		return EnsureUnchanged, err
 	}
-	return true, nil
+	if existed {
+		return EnsureUpdated, nil
+	}
+	return EnsureCreated, nil
 }

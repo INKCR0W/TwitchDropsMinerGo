@@ -93,9 +93,12 @@ func run(args []string) int {
 		}
 	}()
 
-	if rewrote, err := config.EnsureFile(layout.SettingsFile, settings); err != nil {
+	switch outcome, err := config.EnsureFile(layout.SettingsFile, settings); {
+	case err != nil:
 		logger.Warn("补全配置文件失败,沿用内存配置继续", "error", err)
-	} else if rewrote {
+	case outcome == config.EnsureCreated:
+		logger.Info("已创建配置文件")
+	case outcome == config.EnsureUpdated:
 		logger.Info("配置文件已更新以包含新增配置项")
 	}
 
