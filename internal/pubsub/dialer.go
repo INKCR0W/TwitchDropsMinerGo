@@ -3,6 +3,7 @@ package pubsub
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,8 +20,11 @@ type gorillaConnection struct {
 	conn *websocket.Conn
 }
 
-func newGorillaDialer(proxyURL string) (Dialer, error) {
+func newGorillaDialer(proxyURL string, netDialTLS func(context.Context, string, string) (net.Conn, error)) (Dialer, error) {
 	dialer := *websocket.DefaultDialer
+	if netDialTLS != nil {
+		dialer.NetDialTLSContext = netDialTLS
+	}
 	if strings.TrimSpace(proxyURL) != "" {
 		parsedURL, err := url.Parse(proxyURL)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -48,22 +49,23 @@ type Dialer interface {
 }
 
 type Options struct {
-	Logger          *slog.Logger
-	Auth            Authenticator
-	HeadersProvider HeadersProvider
-	Dialer          Dialer
-	Endpoint        string
-	ProxyURL        string
-	PingInterval    time.Duration
-	PingTimeout     time.Duration
-	ReadTimeout     time.Duration
-	ListenBatchSize int
-	MaxShards       int
-	ShardTopicLimit int
-	Backoff         httpclient.BackoffConfig
-	Now             func() time.Time
-	Sleep           func(context.Context, time.Duration) error
-	NonceGenerator  func() (string, error)
+	Logger            *slog.Logger
+	Auth              Authenticator
+	HeadersProvider   HeadersProvider
+	Dialer            Dialer
+	Endpoint          string
+	ProxyURL          string
+	PingInterval      time.Duration
+	PingTimeout       time.Duration
+	ReadTimeout       time.Duration
+	ListenBatchSize   int
+	MaxShards         int
+	ShardTopicLimit   int
+	Backoff           httpclient.BackoffConfig
+	Now               func() time.Time
+	Sleep             func(context.Context, time.Duration) error
+	NonceGenerator    func() (string, error)
+	NetDialTLSContext func(context.Context, string, string) (net.Conn, error)
 }
 
 type Status struct {
@@ -186,7 +188,7 @@ func NewManager(options Options) (*Manager, error) {
 
 	dialer := options.Dialer
 	if dialer == nil {
-		defaultDialer, err := newGorillaDialer(options.ProxyURL)
+		defaultDialer, err := newGorillaDialer(options.ProxyURL, options.NetDialTLSContext)
 		if err != nil {
 			return nil, err
 		}
