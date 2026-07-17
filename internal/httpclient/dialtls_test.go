@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,5 +52,54 @@ func TestOptionsDialTLSContextIsUsedAndDisablesProxy(t *testing.T) {
 	}
 	if proxyHits.Load() != 0 {
 		t.Fatalf("DialTLSContext 非空时代理不应被使用，实际命中 %d 次", proxyHits.Load())
+	}
+}
+
+func TestDialTLSContextClearsInheritedProxy(t *testing.T) {
+	t.Parallel()
+
+	client, err := New(Options{
+		Settings:    config.Settings{Proxy: "http://127.0.0.1:9"},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+		DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("stub")
+		},
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport 类型不符: %T", client.httpClient.Transport)
+	}
+	if transport.DialTLSContext == nil {
+		t.Fatal("DialTLSContext 未被装配")
+	}
+	if transport.Proxy != nil {
+		t.Fatal("大陆模式下必须清除 Transport.Proxy, 否则环境代理会绕过 DialTLSContext")
+	}
+}
+
+func TestProxyPreservedWithoutDialTLSContext(t *testing.T) {
+	t.Parallel()
+
+	client, err := New(Options{
+		Settings:    config.Settings{Proxy: "http://127.0.0.1:9"},
+		CookiesPath: filepath.Join(t.TempDir(), "cookies.json"),
+	})
+	if err != nil {
+		t.Fatalf("New 返回错误: %v", err)
+	}
+
+	transport, ok := client.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport 类型不符: %T", client.httpClient.Transport)
+	}
+	if transport.Proxy == nil {
+		t.Fatal("未开启大陆模式时不应清除 Proxy")
+	}
+	if transport.DialTLSContext != nil {
+		t.Fatal("未提供 DialTLSContext 时不应装配")
 	}
 }
