@@ -67,6 +67,9 @@ docker compose up -d && docker compose logs -f miner
   "proxy": "",
   "connection_quality": 1,
   "watch_stall_minutes": 10,
+  "mainland": {
+    "enabled": false
+  },
   "log": {
     "level": "info",
     "format": "text",
@@ -88,6 +91,7 @@ docker compose up -d && docker compose logs -f miner
 | `proxy` | `""` | 代理 URL（HTTP 与 PubSub WebSocket 均生效），须含协议和主机 |
 | `connection_quality` | `1` | 网络质量系数 1–6：连接超时 = 5s × 该值，请求超时 = 10s × 该值，网络差调大 |
 | `watch_stall_minutes` | `10` | 观看正常但 drop 进度连续该分钟数无增长时，判定频道卡死，回避 30 分钟并切台 |
+| `mainland.enabled` | `false` | 大陆模式：中国大陆网络下免代理连接 Twitch，见下 |
 | `log.level` | `info` | `debug` / `info` / `warn` / `error` |
 | `log.format` | `text` | `text` 或 `json`，stdout 与文件同格式 |
 | `log.file_enabled` | `true` | 除 stdout 外同时写 `logs/miner-server.log` |
@@ -103,6 +107,20 @@ docker compose up -d && docker compose logs -f miner
 - `smart_balance` —— 按 `priority` 挖，但允许紧急的非 priority 活动在安全前提下插队
 
 `smart_priority_safety_minutes`（默认 120）仅在 `smart_balance` 模式下生效：只有当 `priority` 列表中每个可挖游戏的富余时间（距结束时间减去还需观看的分钟数，按活动内最紧的 drop 计）都不低于该值时，才允许更紧急的非 priority 游戏插队。这样 priority 游戏可以晚挖，但不会因插队而来不及完成；调小该值会更容易让位给紧急的非 priority 活动。
+
+### 大陆模式
+
+`mainland.enabled` 默认 `false`。在中国大陆网络下，Twitch 的域名解析会被污染，且 TLS 握手中的明文域名会触发连接重置，因此通常需要代理。开启大陆模式后，程序会在自己的进程内换一条连接路径：用 DNS-over-HTTPS 取得真实 IP，握手时改用该域名在 CDN 上对应的基础设施域名，并自行用系统根证书对真实域名校验服务器证书。
+
+它不修改 hosts、不安装任何根证书、不需要管理员权限，也不启动本地代理，关闭设置即完全恢复原状。
+
+几点须知：
+
+- 与 `proxy` 互斥：两者同时配置时以大陆模式为准，`proxy` 被忽略并在启动日志中告警。
+- PubSub（`pubsub-edge.twitch.tv`）在该模式下连不上，程序会自动退回既有的 GQL 轮询兜底。挖取和领取掉落不受影响，仅"刚开播 / 刚可领取"这类事件由实时推送变为最多 59 秒后轮询发现。
+- 连接失败时会明确报错并指出是哪个域名、哪一步失败，不会静默回退。若日志显示持续失败，说明该网络环境不适用，请改用 `proxy`。
+- 各地区网络环境不同，且随时可能变化，该模式不保证长期可用。
+- 修改后重启生效。
 
 配置修改后重启生效（Docker 部署：`docker compose restart`）。
 
