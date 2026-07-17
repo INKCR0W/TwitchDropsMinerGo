@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"strings"
 
 	"twitchdropsminergo/internal/secure"
@@ -147,4 +149,24 @@ func Save(path string, settings Settings) error {
 	_ = secure.HardenFile(path)
 
 	return nil
+}
+
+func EnsureFile(path string, settings Settings) (bool, error) {
+	want, err := storage.MarshalJSONFile(settings)
+	if err != nil {
+		return false, fmt.Errorf("序列化配置失败: %w", err)
+	}
+
+	current, err := os.ReadFile(path)
+	if err == nil && bytes.Equal(current, want) {
+		return false, nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+
+	if err := Save(path, settings); err != nil {
+		return false, err
+	}
+	return true, nil
 }
