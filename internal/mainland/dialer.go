@@ -9,10 +9,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
-const dialTimeout = 10 * time.Second
+const (
+	dialTimeout = 5 * time.Second // 单次 IP 尝试上限, 需明显短于调用方请求预算以便多 IP 兜底
+	dohTimeout  = 4 * time.Second // 单个 DoH 端点上限, 两个端点串行仍留出拨号时间
+)
 
 var (
 	dohEndpoints   = []string{"cloudflare-dns.com", "doh.opendns.com"}
@@ -22,13 +26,17 @@ var (
 )
 
 type Dialer struct {
-	logger    *slog.Logger
-	resolver  *resolver
-	testRoots *x509.CertPool // 仅测试注入; 生产为 nil(系统根)
+	logger      *slog.Logger
+	resolver    *resolver
+	testRoots   *x509.CertPool // 仅测试注入; 生产为 nil(系统根)
+	testDoHPort string         // 仅测试注入; 生产为空即用 443
+
+	dohMu      sync.Mutex
+	dohClients map[string]*http.Client // 按端点缓存, 复用底层 TLS 连接
 }
 
 func New(logger *slog.Logger) *Dialer {
-	d := &Dialer{logger: logger}
+	d := &Dialer{logger: logger, dohClients: map[string]*http.Client{}}
 	d.resolver = newResolver(d.dohGet, time.Now)
 	return d
 }
@@ -116,25 +124,10 @@ func (d *Dialer) dohGet(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (d *Dialer) dohGetVia(ctx context.Context, endpoint, path string) ([]byte, error) {
-	ips := d.resolveEndpoint(ctx, endpoint)
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("解析 DoH 端点 %s 失败", endpoint)
+	client, err := d.dohClientFor(ctx, endpoint)
+	if err != nil {
+		return nil, err
 	}
-	tr := &http.Transport{
-		ForceAttemptHTTP2: true,
-		DialTLSContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			var lastErr error
-			for _, ip := range ips {
-				conn, err := d.tlsHandshake(ctx, net.JoinHostPort(ip, "443"), endpoint, "")
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-			return nil, fmt.Errorf("连接 DoH 端点 %s 失败: %w", endpoint, lastErr)
-		},
-	}
-	client := &http.Client{Transport: tr, Timeout: dialTimeout}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+endpoint+path, nil)
 	if err != nil {
 		return nil, err
@@ -149,6 +142,40 @@ func (d *Dialer) dohGetVia(ctx context.Context, endpoint, path string) ([]byte, 
 		return nil, fmt.Errorf("DoH 端点 %s 返回 %s", endpoint, resp.Status)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+}
+
+// dohClientFor 返回按端点缓存的 DoH client, 复用其底层 TLS 连接; 首次调用时解析端点 IP 并建 transport
+func (d *Dialer) dohClientFor(ctx context.Context, endpoint string) (*http.Client, error) {
+	d.dohMu.Lock()
+	defer d.dohMu.Unlock()
+	if c, ok := d.dohClients[endpoint]; ok {
+		return c, nil
+	}
+	ips := d.resolveEndpoint(ctx, endpoint)
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("解析 DoH 端点 %s 失败", endpoint)
+	}
+	port := d.testDoHPort
+	if port == "" {
+		port = "443"
+	}
+	tr := &http.Transport{
+		ForceAttemptHTTP2: true,
+		DialTLSContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var lastErr error
+			for _, ip := range ips {
+				conn, err := d.tlsHandshake(ctx, net.JoinHostPort(ip, port), endpoint, "")
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			return nil, fmt.Errorf("连接 DoH 端点 %s 失败: %w", endpoint, lastErr)
+		},
+	}
+	client := &http.Client{Transport: tr, Timeout: dohTimeout}
+	d.dohClients[endpoint] = client
+	return client, nil
 }
 
 // resolveEndpoint 用系统解析器解析 DoH 端点(未被污染); 失败回退兜底 IP

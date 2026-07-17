@@ -2,14 +2,21 @@ package mainland
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"io"
 	"log"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -89,6 +96,80 @@ func TestDialUsesBenignSNIButVerifiesRealHost(t *testing.T) {
 	if got := conn.ConnectionState().ServerName; got != "cdn.example.com" {
 		t.Fatalf("上送的 SNI 应为良性 CNAME cdn.example.com, 实际 %q", got)
 	}
+}
+
+// 证明 DoH client 按端点复用: 两次不同域名的解析都经真实 dohGet -> dohGetVia 路径,
+// 但底层只应新建一条到 DoH 端点的连接(第二次查询复用第一次的连接), 而非每次都重新握手
+func TestDoHClientReusedAcrossQueries(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		_, _ = io.WriteString(w, `{"Answer":[{"name":"`+name+`","type":1,"data":"203.0.113.1","TTL":300}]}`)
+	})
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+
+	const endpoint = "doh-test.internal"
+	cert, pool := selfSignedServerCert(t, endpoint)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+
+	var newConns int32
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			atomic.AddInt32(&newConns, 1)
+		}
+	}
+	srv.StartTLS()
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+
+	// 临时替换包级端点表, 指向本地测试 server; 该变量只在此测试中读写, 未标 t.Parallel
+	origEndpoints, origFallback := dohEndpoints, dohFallbackIPs
+	dohEndpoints = []string{endpoint}
+	dohFallbackIPs = map[string][]string{endpoint: {"127.0.0.1"}}
+	defer func() { dohEndpoints, dohFallbackIPs = origEndpoints, origFallback }()
+
+	d := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.testRoots = pool
+	d.testDoHPort = port
+
+	if _, err := d.resolver.resolve(context.Background(), "host-a.example"); err != nil {
+		t.Fatalf("解析 host-a 失败: %v", err)
+	}
+	if _, err := d.resolver.resolve(context.Background(), "host-b.example"); err != nil {
+		t.Fatalf("解析 host-b 失败: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&newConns); got != 1 {
+		t.Fatalf("两次不同域名的 DoH 查询应复用同一条端点连接, 实际新建连接数 %d", got)
+	}
+}
+
+func selfSignedServerCert(t *testing.T, host string) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: host},
+		DNSNames:              []string{host},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pool
 }
 
 func newTestDialer(t *testing.T, srv *httptest.Server, stub map[string]dohResult) *Dialer {
