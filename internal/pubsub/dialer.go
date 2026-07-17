@@ -24,8 +24,8 @@ func newGorillaDialer(proxyURL string, netDialTLS func(context.Context, string, 
 	dialer := *websocket.DefaultDialer
 	if netDialTLS != nil {
 		dialer.NetDialTLSContext = netDialTLS
-	}
-	if strings.TrimSpace(proxyURL) != "" {
+		dialer.Proxy = nil // 清除 DefaultDialer 继承的 ProxyFromEnvironment, 否则系统代理会绕过注入的 TLS dialer
+	} else if strings.TrimSpace(proxyURL) != "" {
 		parsedURL, err := url.Parse(proxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("解析 PubSub 代理地址失败: %w", err)

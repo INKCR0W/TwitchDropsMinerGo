@@ -35,3 +35,39 @@ func TestNewGorillaDialerNilNetDialTLSStillWorks(t *testing.T) {
 		t.Fatalf("nil netDialTLS 应可构造: %v", err)
 	}
 }
+
+func TestNetDialTLSDisablesProxy(t *testing.T) {
+	t.Parallel()
+	stub := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return nil, context.Canceled
+	}
+	d, err := newGorillaDialer("http://127.0.0.1:9", stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gd, ok := d.(*gorillaDialer)
+	if !ok {
+		t.Fatalf("类型不符: %T", d)
+	}
+	if gd.dialer.NetDialTLSContext == nil {
+		t.Fatal("NetDialTLSContext 未装配")
+	}
+	if gd.dialer.Proxy != nil {
+		t.Fatal("注入 TLS dialer 时必须清除 Proxy, 否则代理会绕过它")
+	}
+}
+
+func TestProxyPreservedWithoutNetDialTLS(t *testing.T) {
+	t.Parallel()
+	d, err := newGorillaDialer("http://127.0.0.1:9", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gd, ok := d.(*gorillaDialer)
+	if !ok {
+		t.Fatalf("类型不符: %T", d)
+	}
+	if gd.dialer.Proxy == nil {
+		t.Fatal("未注入 TLS dialer 时应保留 Proxy")
+	}
+}
