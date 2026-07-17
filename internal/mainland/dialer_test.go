@@ -62,6 +62,29 @@ func TestDialAllIPsFailInvalidates(t *testing.T) {
 	if !strings.Contains(err.Error(), "dead.test") {
 		t.Fatalf("错误应点名域名, 实际: %v", err)
 	}
+	if _, ok := d.resolver.cache["dead.test"]; ok {
+		t.Fatal("全部 IP 失败后应清除该 host 的缓存")
+	}
+}
+
+func TestDialUsesBenignSNIButVerifiesRealHost(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+
+	d := newTestDialer(t, srv, map[string]dohResult{
+		"example.com": {IPs: []string{"127.0.0.1"}, CNAMEs: []string{"cdn.example.com"}, TTL: 300},
+	})
+	conn, err := d.dial(context.Background(), net.JoinHostPort("example.com", port))
+	if err != nil {
+		t.Fatalf("dial 失败: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if got := conn.ConnectionState().ServerName; got != "cdn.example.com" {
+		t.Fatalf("上送的 SNI 应为良性 CNAME cdn.example.com, 实际 %q", got)
+	}
 }
 
 func newTestDialer(t *testing.T, srv *httptest.Server, stub map[string]dohResult) *Dialer {

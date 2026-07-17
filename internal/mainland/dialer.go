@@ -16,7 +16,9 @@ const dialTimeout = 10 * time.Second
 
 var (
 	dohEndpoints   = []string{"cloudflare-dns.com", "doh.opendns.com"}
-	dohFallbackIPs = []string{"104.16.248.249", "104.16.249.249"}
+	dohFallbackIPs = map[string][]string{
+		"cloudflare-dns.com": {"104.16.248.249", "104.16.249.249"},
+	}
 )
 
 type Dialer struct {
@@ -32,11 +34,19 @@ func New(logger *slog.Logger) *Dialer {
 }
 
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	return d.dial(ctx, addr)
+	conn, err := d.dial(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (d *Dialer) NetDialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	return d.dial(ctx, addr)
+	conn, err := d.dial(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (d *Dialer) dial(ctx context.Context, addr string) (*tls.Conn, error) {
@@ -49,6 +59,7 @@ func (d *Dialer) dial(ctx context.Context, addr string) (*tls.Conn, error) {
 		return nil, err
 	}
 	if len(res.IPs) == 0 {
+		d.resolver.invalidate(host)
 		return nil, fmt.Errorf("大陆模式: %s 无 A 记录", host)
 	}
 	sni := benignSNI(res)
@@ -106,6 +117,9 @@ func (d *Dialer) dohGet(ctx context.Context, path string) ([]byte, error) {
 
 func (d *Dialer) dohGetVia(ctx context.Context, endpoint, path string) ([]byte, error) {
 	ips := d.resolveEndpoint(ctx, endpoint)
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("解析 DoH 端点 %s 失败", endpoint)
+	}
 	tr := &http.Transport{
 		ForceAttemptHTTP2: true,
 		DialTLSContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -131,6 +145,9 @@ func (d *Dialer) dohGetVia(ctx context.Context, endpoint, path string) ([]byte, 
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("DoH 端点 %s 返回 %s", endpoint, resp.Status)
+	}
 	return io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 }
 
@@ -147,5 +164,5 @@ func (d *Dialer) resolveEndpoint(ctx context.Context, endpoint string) []string 
 			return v4
 		}
 	}
-	return dohFallbackIPs
+	return dohFallbackIPs[endpoint]
 }
