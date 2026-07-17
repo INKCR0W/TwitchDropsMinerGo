@@ -81,10 +81,6 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
 		return 4
 	}
-	if err := ensureSettingsFile(layout.SettingsFile, settings); err != nil {
-		fmt.Fprintf(os.Stderr, "初始化配置文件失败: %v\n", err)
-		return 4
-	}
 
 	logger, closeLogger, err := logging.New(settings.Log, layout.LogFile)
 	if err != nil {
@@ -96,6 +92,13 @@ func run(args []string) int {
 			fmt.Fprintf(os.Stderr, "关闭日志文件失败: %v\n", closeErr)
 		}
 	}()
+
+	if rewrote, err := config.EnsureFile(layout.SettingsFile, settings); err != nil {
+		logger.Error("补全配置文件失败", "error", err)
+		return 4
+	} else if rewrote {
+		logger.Info("配置文件已更新以包含新增配置项")
+	}
 
 	clearPendingLogin(logger, layout.PendingLoginFile)()
 
@@ -257,16 +260,6 @@ func parseArgs(args []string) (cliOptions, error) {
 	}
 
 	return options, nil
-}
-
-func ensureSettingsFile(path string, settings config.Settings) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
-	return config.Save(path, settings)
 }
 
 func failRun(application *app.App, logger *slog.Logger, message string, err error) int {
