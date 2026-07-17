@@ -141,7 +141,10 @@ func Save(path string, settings Settings) error {
 	if err := settings.Validate(); err != nil {
 		return err
 	}
+	return writeSettings(path, settings)
+}
 
+func writeSettings(path string, settings Settings) error {
 	if err := storage.SaveJSONFile(path, settings); err != nil {
 		return fmt.Errorf("写入配置文件失败: %w", err)
 	}
@@ -152,6 +155,10 @@ func Save(path string, settings Settings) error {
 }
 
 func EnsureFile(path string, settings Settings) (bool, error) {
+	if err := settings.Validate(); err != nil {
+		return false, err
+	}
+
 	want, err := storage.MarshalJSONFile(settings)
 	if err != nil {
 		return false, fmt.Errorf("序列化配置失败: %w", err)
@@ -165,7 +172,7 @@ func EnsureFile(path string, settings Settings) (bool, error) {
 		return false, fmt.Errorf("读取配置文件失败: %w", err)
 	}
 
-	if err := Save(path, settings); err != nil {
+	if err := writeSettings(path, settings); err != nil {
 		return false, err
 	}
 	return true, nil

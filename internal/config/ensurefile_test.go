@@ -68,6 +68,30 @@ func TestEnsureFileNoRewriteWhenCanonical(t *testing.T) {
 	}
 }
 
+func TestEnsureFileNormalizesBeforeCompare(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	settings := DefaultSettings()
+	settings.Priority = []string{"a", "a", " b "}
+
+	first, err := EnsureFile(path, settings)
+	if err != nil {
+		t.Fatalf("首次 EnsureFile 返回错误: %v", err)
+	}
+	if !first {
+		t.Fatal("文件不存在时应写入")
+	}
+
+	second, err := EnsureFile(path, settings)
+	if err != nil {
+		t.Fatalf("二次 EnsureFile 返回错误: %v", err)
+	}
+	if second {
+		t.Fatal("未归一化输入重复调用不应再次重写")
+	}
+}
+
 func TestEnsureFileDropsObsoleteKeys(t *testing.T) {
 	t.Parallel()
 
