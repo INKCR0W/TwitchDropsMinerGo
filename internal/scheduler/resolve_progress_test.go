@@ -160,6 +160,40 @@ func TestResolveProgressPrefersAuthoritativeGQLProgress(t *testing.T) {
 	}
 }
 
+func TestResolveProgressLogsPolledDropProgress(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	game := domain.Game{ID: 1, Name: "Watched"}
+	campaign := mustCampaign(t, campaignSpec(now, "campaign-gql", game, now.Add(-time.Hour), now.Add(time.Hour), nil))
+
+	var logs logBuffer
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		logger:    logs.logger(),
+		gqlClient: currentDropGQLClient("campaign-gql-drop", 12),
+	})
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+	scheduler.wantedGames = []domain.Game{game}
+	channel := domain.Channel{
+		ID:    1,
+		Login: "channel",
+		Stream: &domain.Stream{
+			BroadcastID:  1,
+			Game:         &game,
+			DropsEnabled: true,
+		},
+	}
+
+	scheduler.resolveProgress(context.Background(), channel, true)
+
+	if !logs.contains("轮询到掉宝进度") {
+		t.Fatalf("GQL 轮询取得权威进度后应输出进度日志, 实际: %s", logs.String())
+	}
+	if !logs.contains("current_minutes=12") {
+		t.Fatalf("进度日志应含轮询到的分钟数 12, 实际: %s", logs.String())
+	}
+}
+
 func TestResolveProgressSkipsLocalEstimateWhenWatchNotReported(t *testing.T) {
 	t.Parallel()
 

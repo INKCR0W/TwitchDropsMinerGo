@@ -176,7 +176,14 @@ func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Chan
 		return false
 	}
 
-	return s.applyDropProgress(s.nowUTC(), &channel, dropID, currentMinutes)
+	if !s.applyDropProgress(s.nowUTC(), &channel, dropID, currentMinutes) {
+		return false
+	}
+
+	attrs := []any{"drop_id", dropID, "current_minutes", currentMinutes}
+	attrs = append(attrs, s.watchProgressAttrs(dropID)...)
+	s.logger.Info("轮询到掉宝进度", attrs...)
+	return true
 }
 
 func (s *Scheduler) fetchCurrentDrop(ctx context.Context, channelID int64) (string, int, bool, error) {
