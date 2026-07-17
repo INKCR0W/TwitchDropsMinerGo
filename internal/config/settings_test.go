@@ -184,3 +184,35 @@ func TestFileStoreLoadsAndSavesSettings(t *testing.T) {
 		t.Fatalf("Load 未返回保存后的配置: %#v", loaded)
 	}
 }
+
+func TestMainlandDefaultsOffAndIsZero(t *testing.T) {
+	t.Parallel()
+
+	if DefaultSettings().Mainland.Enabled {
+		t.Fatal("大陆模式默认必须关闭")
+	}
+	if DefaultSettings().MainlandEnabled() {
+		t.Fatal("MainlandEnabled 默认应为 false")
+	}
+
+	// 仅设置 Mainland 组时, IsZero 必须为 false, 否则会被整体替换为默认值.
+	var s Settings
+	s.Mainland.Enabled = true
+	if s.IsZero() {
+		t.Fatal("仅设了 Mainland.Enabled 的配置 IsZero 必须为 false")
+	}
+
+	// 全零配置 IsZero 应为 true.
+	if !(Settings{}).IsZero() {
+		t.Fatal("全零配置 IsZero 应为 true")
+	}
+}
+
+func TestMainlandValidateAllows(t *testing.T) {
+	t.Parallel()
+	s := DefaultSettings()
+	s.Mainland.Enabled = true
+	if err := s.Validate(); err != nil {
+		t.Fatalf("开启大陆模式不应报错: %v", err)
+	}
+}
