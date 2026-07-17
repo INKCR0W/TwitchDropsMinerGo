@@ -82,17 +82,55 @@ func (d *Dialer) dial(ctx context.Context, addr string) (*tls.Conn, error) {
 		return nil, fmt.Errorf("大陆模式: %s 无 A 记录", host)
 	}
 	sni := benignSNI(res)
-	var lastErr error
-	for _, ip := range res.IPs {
-		conn, hErr := d.tlsHandshake(ctx, net.JoinHostPort(ip, port), host, sni)
-		if hErr == nil {
-			return conn, nil
-		}
-		lastErr = hErr
-		d.logger.Debug("大陆模式握手失败, 尝试下一 IP", "host", host, "ip", ip, "sni", sni, "error", hErr)
+	conn, err := d.dialIPs(ctx, res.IPs, port, host, sni)
+	if err != nil {
+		d.resolver.invalidate(host)
+		return nil, fmt.Errorf("大陆模式: %s 全部 IP 失败(sni=%q): %w", host, sni, err)
 	}
-	d.resolver.invalidate(host)
-	return nil, fmt.Errorf("大陆模式: %s 全部 IP 失败(sni=%q): %w", host, sni, lastErr)
+	return conn, nil
+}
+
+type dialAttempt struct {
+	ip   string
+	conn *tls.Conn
+	err  error
+}
+
+// dialIPs 并发竞速 ips 的 TLS 握手, 首个通过验证的连接胜出并立即返回;
+// 其余尝试被取消, 若仍产出已建立的连接则由后台 goroutine 排空并关闭, 不阻塞、不泄漏
+func (d *Dialer) dialIPs(ctx context.Context, ips []string, port, host, sni string) (*tls.Conn, error) {
+	raceCtx, cancel := context.WithCancel(ctx)
+	results := make(chan dialAttempt, len(ips))
+	for _, ip := range ips {
+		go func(ip string) {
+			conn, err := d.tlsHandshake(raceCtx, net.JoinHostPort(ip, port), host, sni)
+			results <- dialAttempt{ip: ip, conn: conn, err: err}
+		}(ip)
+	}
+
+	var lastErr error
+	for i := 0; i < len(ips); i++ {
+		got := <-results
+		if got.err != nil {
+			lastErr = got.err
+			d.logger.Debug("大陆模式握手失败", "host", host, "ip", got.ip, "sni", sni, "error", got.err)
+			continue
+		}
+		cancel()
+		go drainDialAttempts(results, len(ips)-i-1)
+		return got.conn, nil
+	}
+	cancel()
+	return nil, lastErr
+}
+
+// drainDialAttempts 消费剩余握手结果, 关闭竞速落败但仍已建立的连接
+func drainDialAttempts(results <-chan dialAttempt, n int) {
+	for i := 0; i < n; i++ {
+		if got := <-results; got.conn != nil {
+			_ = got.conn.Close()
+		}
+	}
 }
 
 func (d *Dialer) tlsHandshake(ctx context.Context, ipPort, host, sni string) (*tls.Conn, error) {

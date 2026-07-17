@@ -77,6 +77,55 @@ func TestDialAllIPsFailInvalidates(t *testing.T) {
 	}
 }
 
+// 用同一 server 挂在多个回环 IP 上, 制造"多个 IP 都能成功握手"的竞速场景;
+// 断言首个胜出者返回后, 落败者的连接最终都被关闭(server 侧净开连接数收敛到 1), 不泄漏
+func TestDialRaceClosesLoserConnections(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+
+	var openConns int32
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			atomic.AddInt32(&openConns, 1)
+		case http.StateClosed, http.StateHijacked:
+			atomic.AddInt32(&openConns, -1)
+		}
+	}
+
+	// 监听所有接口, 这样 127.0.0.1/.2/.3 都能连到同一个 server 端口, 三个 IP 皆可成功握手
+	l, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("监听失败: %v", err)
+	}
+	_ = srv.Listener.Close()
+	srv.Listener = l
+	srv.StartTLS()
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+
+	d := newTestDialer(t, srv, map[string]dohResult{
+		"example.com": {IPs: []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}, TTL: 300},
+	})
+	conn, err := d.dial(context.Background(), net.JoinHostPort("example.com", port))
+	if err != nil {
+		t.Fatalf("dial 失败: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	// 给后台排空 goroutine 一点时间关闭落败连接
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if got := atomic.LoadInt32(&openConns); got == 1 {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("竞速落败的连接未被关闭, server 侧剩余打开连接数 %d", got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestDialUsesBenignSNIButVerifiesRealHost(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
