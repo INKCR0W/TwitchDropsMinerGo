@@ -94,8 +94,7 @@ func run(args []string) int {
 	}()
 
 	if rewrote, err := config.EnsureFile(layout.SettingsFile, settings); err != nil {
-		logger.Error("补全配置文件失败", "error", err)
-		return 4
+		logger.Warn("补全配置文件失败,沿用内存配置继续", "error", err)
 	} else if rewrote {
 		logger.Info("配置文件已更新以包含新增配置项")
 	}
