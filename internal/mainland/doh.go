@@ -80,9 +80,7 @@ func (r *resolver) resolve(ctx context.Context, host string) (dohResult, error) 
 	}
 	r.mu.Unlock()
 
-	q := "https://doh-endpoint/dns-query?" + url.Values{
-		"name": {host}, "type": {"A"},
-	}.Encode()
+	q := "/dns-query?" + url.Values{"name": {host}, "type": {"A"}}.Encode()
 	body, err := r.httpGet(ctx, q)
 	if err != nil {
 		return dohResult{}, fmt.Errorf("DoH 查询 %s 失败: %w", host, err)
