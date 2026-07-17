@@ -102,7 +102,7 @@ func (d *Dialer) tlsHandshake(ctx context.Context, ipPort, host, sni string) (*t
 	return conn, nil
 }
 
-// dohGet 把一次 DoH 查询打到某个 fronted 端点(空 SNI + 对端点自校验).
+// dohGet 把一次 DoH 查询打到某个 fronted 端点(空 SNI + 对端点自校验)
 func (d *Dialer) dohGet(ctx context.Context, path string) ([]byte, error) {
 	var lastErr error
 	for _, endpoint := range dohEndpoints {
@@ -151,7 +151,7 @@ func (d *Dialer) dohGetVia(ctx context.Context, endpoint, path string) ([]byte, 
 	return io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 }
 
-// resolveEndpoint 用系统解析器解析 DoH 端点(未被污染); 失败回退兜底 IP.
+// resolveEndpoint 用系统解析器解析 DoH 端点(未被污染); 失败回退兜底 IP
 func (d *Dialer) resolveEndpoint(ctx context.Context, endpoint string) []string {
 	if addrs, err := net.DefaultResolver.LookupHost(ctx, endpoint); err == nil {
 		var v4 []string

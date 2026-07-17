@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,19 +14,20 @@ import (
 	"time"
 )
 
-// 用测试 TLS server 的证书池 + host 覆盖, 验证 dial 全链路(不依赖真实网络).
+// 用测试 TLS server 的证书池 + host 覆盖, 验证 dial 全链路(不依赖真实网络)
 func TestDialHandshakesAndVerifies(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "ok")
 	}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	defer srv.Close()
 	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
 
 	d := newTestDialer(t, srv, map[string]dohResult{
 		"example.com": {IPs: []string{"127.0.0.1"}, TTL: 300},
 	})
-	// dial 用 host:port 形式; 覆盖端口为测试端口.
+	// dial 用 host:port 形式; 覆盖端口为测试端口
 	conn, err := d.dial(context.Background(), net.JoinHostPort("example.com", port))
 	if err != nil {
 		t.Fatalf("dial 失败: %v", err)
@@ -36,10 +38,11 @@ func TestDialHandshakesAndVerifies(t *testing.T) {
 func TestDialFallsBackAcrossIPs(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	defer srv.Close()
 	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
 
-	// 第一个 IP 是黑洞(不可连), 第二个是测试 server, 应回退成功.
+	// 第一个 IP 是黑洞(不可连), 第二个是测试 server, 应回退成功
 	d := newTestDialer(t, srv, map[string]dohResult{
 		"example.com": {IPs: []string{"192.0.2.1", "127.0.0.1"}, TTL: 300},
 	})
@@ -70,6 +73,7 @@ func TestDialAllIPsFailInvalidates(t *testing.T) {
 func TestDialUsesBenignSNIButVerifiesRealHost(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	defer srv.Close()
 	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
 

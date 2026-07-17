@@ -34,7 +34,7 @@ func TestBenignSNI(t *testing.T) {
 
 func TestVerifyPeerCertificatesRejectsWrongHost(t *testing.T) {
 	t.Parallel()
-	// 自签一张 CN=example.com 的证书, 用它自己当根.
+	// 自签一张 CN=example.com 的证书, 用它自己当根
 	roots, leaf := selfSignedFor(t, "example.com")
 
 	if err := verifyPeerCertificates([]*x509.Certificate{leaf}, "example.com", roots); err != nil {
@@ -47,7 +47,7 @@ func TestVerifyPeerCertificatesRejectsWrongHost(t *testing.T) {
 
 func TestVerifyConnectionWiring(t *testing.T) {
 	t.Parallel()
-	// 确认 VerifyConnection 闭包在 cs.PeerCertificates 为空时安全报错, 不 panic.
+	// 确认 VerifyConnection 闭包在 cs.PeerCertificates 为空时安全报错, 不 panic
 	cfg := tlsConfigFor("id.twitch.tv", "")
 	if cfg.VerifyConnection == nil || !cfg.InsecureSkipVerify {
 		t.Fatal("必须 InsecureSkipVerify=true 且提供 VerifyConnection")

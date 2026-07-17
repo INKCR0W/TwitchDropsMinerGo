@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-const blockedSuffix = "twitch.tv"
+const blockedName = "twitch.tv"
 
-// benignSNI 返回 CNAME 链中最深、且不含 "twitch.tv" 的基础设施域名; 无则空.
+// benignSNI 返回 CNAME 链中最深、且不含 "twitch.tv" 的基础设施域名; 无则空
 func benignSNI(res dohResult) string {
 	sni := ""
 	for _, cn := range res.CNAMEs {
-		if !strings.Contains(strings.ToLower(cn), blockedSuffix) {
+		if !strings.Contains(strings.ToLower(cn), blockedName) {
 			sni = cn
 		}
 	}
@@ -38,7 +38,7 @@ func verifyPeerCertificates(certs []*x509.Certificate, host string, roots *x509.
 	return nil
 }
 
-// tlsConfigFor 构造对 host 的良性-SNI + 自校验配置. sni 为空即空 SNI.
+// tlsConfigFor 构造对 host 的良性-SNI + 自校验配置, sni 为空即空 SNI
 func tlsConfigFor(host, sni string) *tls.Config {
 	return &tls.Config{
 		ServerName:         sni,
