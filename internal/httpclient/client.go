@@ -41,6 +41,8 @@ type Options struct {
 	Clock       func() time.Time
 	Sleep       func(context.Context, time.Duration) error
 	MaxAttempts int
+	// DialTLSContext 非空时接管所有 TLS 拨号(大陆模式), 并使 Proxy 失效
+	DialTLSContext func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 type Client struct {
@@ -116,7 +118,10 @@ func New(options Options) (*Client, error) {
 	transport.MaxIdleConnsPerHost = 50
 	transport.MaxConnsPerHost = 50
 
-	if proxy := strings.TrimSpace(options.Settings.Proxy); proxy != "" {
+	if options.DialTLSContext != nil {
+		transport.DialTLSContext = options.DialTLSContext
+		transport.Proxy = nil // 显式清除 Clone 继承的 ProxyFromEnvironment, 否则系统代理会绕过 DialTLSContext
+	} else if proxy := strings.TrimSpace(options.Settings.Proxy); proxy != "" {
 		proxyURL, parseErr := url.Parse(proxy)
 		if parseErr != nil {
 			return nil, fmt.Errorf("解析代理地址失败: %w", parseErr)
