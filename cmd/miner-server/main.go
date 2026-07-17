@@ -110,12 +110,15 @@ func run(args []string) int {
 		return 1
 	}
 
+	mainlandDialer := newMainlandDialer(application.Settings(), logger)
+
 	clientInfo := httpclient.AndroidAppClient
 	httpClient, err := httpclient.New(httpclient.Options{
-		Logger:      logger,
-		Settings:    application.Settings(),
-		CookiesPath: layout.CookiesFile,
-		ClientInfo:  clientInfo,
+		Logger:         logger,
+		Settings:       application.Settings(),
+		CookiesPath:    layout.CookiesFile,
+		ClientInfo:     clientInfo,
+		DialTLSContext: mainlandDialerTLS(mainlandDialer),
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 HTTP 客户端失败", err)
@@ -190,7 +193,8 @@ func run(args []string) int {
 		HeadersProvider: authState.HeadersProvider(auth.HeadersOptions{
 			UserAgent: clientInfo.UserAgent,
 		}),
-		ProxyURL: application.Settings().Proxy,
+		ProxyURL:          application.Settings().Proxy,
+		NetDialTLSContext: mainlandDialerTLS(mainlandDialer),
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 PubSub 管理器失败", err)
