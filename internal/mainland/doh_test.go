@@ -30,6 +30,18 @@ func TestParseDoHAnswers(t *testing.T) {
 	}
 }
 
+func TestParseDoHAnswersZeroTTLWins(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"Answer":[{"name":"x","type":1,"data":"1.2.3.4","TTL":0},{"name":"x","type":1,"data":"5.6.7.8","TTL":3600}]}`)
+	got, err := parseDoHAnswers(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TTL != 0 {
+		t.Fatalf("含 TTL:0 的 A 记录时最小 TTL 应为 0, 实际 %d", got.TTL)
+	}
+}
+
 func TestResolverCachesUntilTTL(t *testing.T) {
 	t.Parallel()
 	calls := 0

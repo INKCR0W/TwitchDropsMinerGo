@@ -36,17 +36,20 @@ func parseDoHAnswers(body []byte) (dohResult, error) {
 		return dohResult{}, fmt.Errorf("解析 DoH 响应失败: %w", err)
 	}
 	var out dohResult
-	minTTL := 0
+	minTTL := -1
 	for _, a := range payload.Answer {
 		switch a.Type {
 		case 1: // A
 			out.IPs = append(out.IPs, a.Data)
-			if minTTL == 0 || (a.TTL > 0 && a.TTL < minTTL) {
+			if minTTL < 0 || a.TTL < minTTL {
 				minTTL = a.TTL
 			}
 		case 5: // CNAME
 			out.CNAMEs = append(out.CNAMEs, strings.TrimSuffix(a.Data, "."))
 		}
+	}
+	if minTTL < 0 {
+		minTTL = 0
 	}
 	out.TTL = minTTL
 	return out, nil
