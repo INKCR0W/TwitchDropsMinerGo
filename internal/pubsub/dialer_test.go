@@ -20,7 +20,7 @@ func TestNewGorillaDialerWiresNetDialTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 触发一次拨号, gorilla 应经由 NetDialTLSContext.
+	// 触发一次拨号, gorilla 应经由 NetDialTLSContext
 	_, _, _ = d.DialContext(context.Background(), "wss://pubsub-edge.twitch.tv/v1", nil)
 	select {
 	case <-called:

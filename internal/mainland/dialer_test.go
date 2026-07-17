@@ -128,7 +128,7 @@ func TestDoHClientReusedAcrossQueries(t *testing.T) {
 	dohFallbackIPs = map[string][]string{endpoint: {"127.0.0.1"}}
 	defer func() { dohEndpoints, dohFallbackIPs = origEndpoints, origFallback }()
 
-	d := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
 	d.testRoots = pool
 	d.testDoHPort = port
 
@@ -144,7 +144,46 @@ func TestDoHClientReusedAcrossQueries(t *testing.T) {
 	}
 }
 
-func selfSignedServerCert(t *testing.T, host string) (tls.Certificate, *x509.CertPool) {
+// dohGetVia 对非 200 状态码的处理专为让 dohGet 回退到下一端点; 用两个 stub 端点验证:
+// 第一个返回 500, 第二个返回有效应答, 断言最终拿到第二个端点的答案.
+// 两个端点共用同一物理 server(证书对两个域名都有效), 因为 testDoHPort 是全局单一端口的测试注入点
+func TestDoHFailsOverToSecondEndpoint(t *testing.T) {
+	const badEndpoint, goodEndpoint = "doh-bad.internal", "doh-good.internal"
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == badEndpoint {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, `{"Answer":[{"name":"good.example","type":1,"data":"203.0.113.9","TTL":300}]}`)
+	})
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	cert, pool := selfSignedServerCert(t, badEndpoint, goodEndpoint)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	srv.StartTLS()
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+
+	// 临时替换包级端点表, 两个端点都指向同一测试 server; 该变量只在此测试中读写, 未标 t.Parallel
+	origEndpoints, origFallback := dohEndpoints, dohFallbackIPs
+	dohEndpoints = []string{badEndpoint, goodEndpoint}
+	dohFallbackIPs = map[string][]string{badEndpoint: {"127.0.0.1"}, goodEndpoint: {"127.0.0.1"}}
+	defer func() { dohEndpoints, dohFallbackIPs = origEndpoints, origFallback }()
+
+	d := New(slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	d.testRoots = pool
+	d.testDoHPort = port
+
+	res, err := d.resolver.resolve(context.Background(), "good.example")
+	if err != nil {
+		t.Fatalf("应回退到第二端点成功: %v", err)
+	}
+	if len(res.IPs) != 1 || res.IPs[0] != "203.0.113.9" {
+		t.Fatalf("应返回第二(有效)端点的应答, 实际 %#v", res.IPs)
+	}
+}
+
+func selfSignedServerCert(t *testing.T, hosts ...string) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -152,8 +191,8 @@ func selfSignedServerCert(t *testing.T, host string) (tls.Certificate, *x509.Cer
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: host},
-		DNSNames:              []string{host},
+		Subject:               pkix.Name{CommonName: hosts[0]},
+		DNSNames:              hosts,
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		IsCA:                  true,
@@ -174,7 +213,7 @@ func selfSignedServerCert(t *testing.T, host string) (tls.Certificate, *x509.Cer
 
 func newTestDialer(t *testing.T, srv *httptest.Server, stub map[string]dohResult) *Dialer {
 	t.Helper()
-	d := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
 	d.resolver = newResolver(func(ctx context.Context, url string) ([]byte, error) {
 		return nil, nil // 不走真实 DoH
 	}, func() time.Time { return time.Unix(0, 0) })

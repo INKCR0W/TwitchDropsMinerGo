@@ -195,14 +195,14 @@ func TestMainlandDefaultsOffAndIsZero(t *testing.T) {
 		t.Fatal("MainlandEnabled 默认应为 false")
 	}
 
-	// 仅设置 Mainland 组时, IsZero 必须为 false, 否则会被整体替换为默认值.
+	// 仅设置 Mainland 组时, IsZero 必须为 false, 否则会被整体替换为默认值
 	var s Settings
 	s.Mainland.Enabled = true
 	if s.IsZero() {
 		t.Fatal("仅设了 Mainland.Enabled 的配置 IsZero 必须为 false")
 	}
 
-	// 全零配置 IsZero 应为 true.
+	// 全零配置 IsZero 应为 true
 	if !(Settings{}).IsZero() {
 		t.Fatal("全零配置 IsZero 应为 true")
 	}

@@ -19,7 +19,7 @@ func newMainlandDialer(settings config.Settings, logger *slog.Logger) *mainland.
 		logger.Warn("大陆模式已开启, 配置的代理将被忽略")
 	}
 	logger.Info("大陆模式已开启: 通过 DoH + 良性 SNI 直连 Twitch")
-	return mainland.New(logger)
+	return mainland.New(logger, settings.ConnectionQuality)
 }
 
 // mainlandDialerTLS 保证 dialer 为 nil 时返回 nil 函数值, 而非包裹 nil 接收者的非 nil 函数
