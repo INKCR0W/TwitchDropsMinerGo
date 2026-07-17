@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -124,5 +125,29 @@ func TestQuarantineCorruptSkipsMissingFilesAndOverwritesStaleQuarantine(t *testi
 	}
 	if string(data) != "new garbage" {
 		t.Errorf("应覆盖旧的隔离文件, got=%q", data)
+	}
+}
+
+func TestMarshalJSONFileMatchesSavedBytes(t *testing.T) {
+	t.Parallel()
+
+	value := map[string]any{"b": 2, "a": 1}
+
+	path := filepath.Join(t.TempDir(), "data.json")
+	if err := SaveJSONFile(path, value); err != nil {
+		t.Fatalf("SaveJSONFile 返回错误: %v", err)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取落盘文件失败: %v", err)
+	}
+
+	marshalled, err := MarshalJSONFile(value)
+	if err != nil {
+		t.Fatalf("MarshalJSONFile 返回错误: %v", err)
+	}
+
+	if !bytes.Equal(marshalled, saved) {
+		t.Fatalf("MarshalJSONFile 字节与落盘不一致:\n序列化=%q\n落盘=%q", marshalled, saved)
 	}
 }

@@ -63,17 +63,24 @@ func LoadJSONFile[T any](path string, defaults T) (T, error) {
 	return value, nil
 }
 
+func MarshalJSONFile(value any) ([]byte, error) {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("序列化 JSON 失败: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
 func SaveJSONFile(path string, value any) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("创建目录失败: %w", err)
 	}
 
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := MarshalJSONFile(value)
 	if err != nil {
-		return fmt.Errorf("序列化 JSON 失败: %w", err)
+		return err
 	}
-	data = append(data, '\n')
 
 	tempFile, err := os.CreateTemp(directory, filepath.Base(path)+".*.tmp")
 	if err != nil {
