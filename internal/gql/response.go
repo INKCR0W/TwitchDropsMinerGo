@@ -24,6 +24,10 @@ func (c *Client) handleResponses(responses []Response, allowSingleRetry bool) (r
 					if allowSingleRetry {
 						return true, true, forcedRetryDelay, nil
 					}
+					if responseError.Message == "PersistedQueryNotFound" {
+						c.logger.Error("GQL persisted query hash 已失效，需要更新 internal/gql/registry.go",
+							"operation", operationName(*response))
+					}
 					allHandled = false
 				case "server error":
 					if err := nullifyPath(response, responseError.Path); err != nil {
