@@ -115,7 +115,7 @@ var registry = map[OperationKey]Operation{
 	),
 	OperationGameDirectory: NewOperation(
 		"DirectoryPage_Game",
-		"cb5dc816e139dcb8a118f14b4b677d59abc224a4b016c4bc2bb00a47fe0ddec4",
+		"86bcceb4e8b1a51256ff8eed8bd8aae4acacf80d737efe904f84f3aeadf8cafd",
 		map[string]any{
 			"limit":              30,
 			"slug":               Required("slug"),
