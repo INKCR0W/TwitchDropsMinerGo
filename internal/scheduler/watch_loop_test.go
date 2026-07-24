@@ -88,6 +88,29 @@ func TestWatchLoopSendsWatchAndBumpsMinutesOnFallback(t *testing.T) {
 	}
 }
 
+func TestShouldResolveProgressToleratesProgressAnywhereInWatchCycle(t *testing.T) {
+	t.Parallel()
+
+	now := testTime()
+	scheduler := newTestScheduler(t, testSchedulerOptions{})
+
+	scheduler.lastProgressAt = now.Add(-DefaultWatchInterval / 2)
+	if scheduler.shouldResolveProgress() {
+		t.Fatal("进度距今不足一个 watch 周期时不应再花一次 GQL 兜底")
+	}
+
+	// 判定点每 watchInterval 才来一次, 阈值必须留出足够余量吸收 GQL 往返与调度抖动
+	scheduler.lastProgressAt = now.Add(-DefaultWatchInterval + 5*time.Second)
+	if !scheduler.shouldResolveProgress() {
+		t.Fatal("距上次进度只差 5s 就满一个周期时仍应走 GQL 兜底")
+	}
+
+	scheduler.lastProgressAt = time.Time{}
+	if !scheduler.shouldResolveProgress() {
+		t.Fatal("从未收到过进度时应走 GQL 兜底")
+	}
+}
+
 func TestWatchLoopSkipsFallbackWhenProgressUpdatedAfterSend(t *testing.T) {
 	t.Parallel()
 

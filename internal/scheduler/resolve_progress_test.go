@@ -194,6 +194,42 @@ func TestResolveProgressLogsPolledDropProgress(t *testing.T) {
 	}
 }
 
+func TestResolveProgressStampsProgressBeforeGQLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	start := testTime()
+	clock := start
+	game := domain.Game{ID: 1, Name: "Watched"}
+	campaign := mustCampaign(t, campaignSpec(start, "campaign-slow-gql", game, start.Add(-time.Hour), start.Add(time.Hour), nil))
+
+	scheduler := newTestScheduler(t, testSchedulerOptions{
+		now: func() time.Time { return clock },
+		gqlClient: &fakeGQLClient{
+			doFunc: func(context.Context, gql.Operation) (gql.Response, error) {
+				clock = clock.Add(10 * time.Second)
+				return gql.Response{}, errAssert
+			},
+		},
+	})
+	scheduler.snapshot = snapshotFromCampaigns(campaign)
+	scheduler.wantedGames = []domain.Game{game}
+	channel := domain.Channel{
+		ID:    1,
+		Login: "channel",
+		Stream: &domain.Stream{
+			BroadcastID:  1,
+			Game:         &game,
+			DropsEnabled: true,
+		},
+	}
+
+	scheduler.resolveProgress(context.Background(), channel, true)
+
+	if !scheduler.lastProgressAt.Equal(start) {
+		t.Fatalf("进度戳应取本轮判定时刻, GQL 耗时不能计入: got=%s want=%s", scheduler.lastProgressAt, start)
+	}
+}
+
 func TestResolveProgressSkipsLocalEstimateWhenWatchNotReported(t *testing.T) {
 	t.Parallel()
 

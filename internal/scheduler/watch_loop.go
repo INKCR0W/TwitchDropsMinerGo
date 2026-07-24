@@ -103,7 +103,7 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 		}
 
 		stateBefore := s.State()
-		if s.shouldResolveProgress(sentAt) {
+		if s.shouldResolveProgress() {
 			s.resolveProgress(ctx, channel, watchReported)
 		}
 		if s.State() == stateBefore {
@@ -124,8 +124,11 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 }
 
 func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel, watchReported bool) {
-	if s.syncProgressFromGQL(ctx, channel) {
-		s.refreshWhenChannelExhausted(channel)
+	// 统一用进入本轮的时刻打进度戳, 否则 GQL 往返耗时会吃掉下一轮兜底的余量
+	now := s.nowUTC()
+
+	if s.syncProgressFromGQL(ctx, now, channel) {
+		s.refreshWhenChannelExhausted(now, channel)
 		return
 	}
 
@@ -133,11 +136,9 @@ func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel,
 		return
 	}
 
-	now := s.nowUTC()
-
 	completedReward, reachedLimit, updated := s.bumpActiveCampaign(now, &channel)
 	if !updated {
-		s.refreshWhenChannelExhausted(channel)
+		s.refreshWhenChannelExhausted(now, channel)
 		return
 	}
 	if completedReward {
@@ -151,9 +152,7 @@ func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel,
 
 // 观看时长打满但认领事件迟到/丢失时, 频道上不再有可推进的活动。此时立即刷新 inventory
 // 去认领掉宝并重算规划, 否则 watch 循环会一直向该频道空转到下次维护重载
-func (s *Scheduler) refreshWhenChannelExhausted(channel domain.Channel) {
-	now := s.nowUTC()
-
+func (s *Scheduler) refreshWhenChannelExhausted(now time.Time, channel domain.Channel) {
 	s.mu.RLock()
 	exhausted := s.activeCampaignLocked(now, &channel) == nil &&
 		s.pendingRewardCompletionCampaignLocked(now, &channel) == nil
@@ -166,7 +165,7 @@ func (s *Scheduler) refreshWhenChannelExhausted(channel domain.Channel) {
 	s.ChangeState(StateInventoryFetch)
 }
 
-func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Channel) bool {
+func (s *Scheduler) syncProgressFromGQL(ctx context.Context, now time.Time, channel domain.Channel) bool {
 	dropID, currentMinutes, ok, err := s.fetchCurrentDrop(ctx, channel.ID)
 	if err != nil {
 		s.logger.Warn("查询 CurrentDrop 失败，回退到本地估算", "channel_id", channel.ID, "error", err)
@@ -176,7 +175,7 @@ func (s *Scheduler) syncProgressFromGQL(ctx context.Context, channel domain.Chan
 		return false
 	}
 
-	if !s.applyDropProgress(s.nowUTC(), &channel, dropID, currentMinutes) {
+	if !s.applyDropProgress(now, &channel, dropID, currentMinutes) {
 		return false
 	}
 
@@ -220,7 +219,8 @@ func (s *Scheduler) fetchCurrentDrop(ctx context.Context, channelID int64) (stri
 	return dropID, int(int64Value(session, "currentMinutesWatched")), true, nil
 }
 
-func (s *Scheduler) shouldResolveProgress(sentAt time.Time) bool {
+// 只看进度多久没来, 不关心它落在周期里的哪个位置; 5/6 对齐上游的"一分钟倒计时留 10s 余量"
+func (s *Scheduler) shouldResolveProgress() bool {
 	if s == nil {
 		return false
 	}
@@ -229,7 +229,7 @@ func (s *Scheduler) shouldResolveProgress(sentAt time.Time) bool {
 	lastProgressAt := s.lastProgressAt
 	s.mu.RUnlock()
 
-	return lastProgressAt.IsZero() || lastProgressAt.Before(sentAt)
+	return lastProgressAt.IsZero() || s.nowUTC().Sub(lastProgressAt) >= s.watchInterval/6*5
 }
 
 func (s *Scheduler) waitForWatchingChannel(ctx context.Context) (int64, bool) {
