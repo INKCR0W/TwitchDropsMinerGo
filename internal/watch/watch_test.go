@@ -90,10 +90,13 @@ func TestSendWatchRequestsAllChunksAndCachesPlaylistPerBroadcast(t *testing.T) {
 func TestSendWatchRejectsInvalidPlaylistAndRenewsFailedPlayback(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name       string
-		body       string
-		status     int
-		headStatus int
+		name          string
+		body          string
+		status        int
+		headStatus    int
+		getError      error
+		headError     error
+		cancelRequest bool
 	}{
 		{name: "expired", status: 403},
 		{name: "offline", status: 404},
@@ -101,8 +104,13 @@ func TestSendWatchRejectsInvalidPlaylistAndRenewsFailedPlayback(t *testing.T) {
 		{name: "empty playlist", status: 200, body: "#EXTM3U\n#EXT-X-ENDLIST"},
 		{name: "invalid scheme", status: 200, body: "#EXTM3U\nfile:///chunk.ts"},
 		{name: "failed chunk", status: 200, body: "#EXTM3U\nchunk.ts", headStatus: 404},
+		{name: "playlist retry exhausted", getError: fmt.Errorf("HTTP 请求达到最大重试次数 5: 状态码 503")},
+		{name: "chunk retry exhausted", status: 200, body: "#EXTM3U\nchunk.ts", headError: fmt.Errorf("HTTP 请求达到最大重试次数 5: 状态码 503")},
+		{name: "caller cancellation", cancelRequest: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			failed := true
 			tokenCalls := 0
 			tracker := newTestTracker(t, testTrackerOptions{
@@ -114,7 +122,14 @@ func TestSendWatchRejectsInvalidPlaylistAndRenewsFailedPlayback(t *testing.T) {
 					if strings.HasPrefix(request.URL, "https://usher.ttvnw.net/") {
 						return httpclient.Response{StatusCode: 200, Body: []byte("#EXTM3U\nhttps://cdn.example/live.m3u8")}, nil
 					}
+					if failed && tc.cancelRequest {
+						cancel()
+						return httpclient.Response{}, ctx.Err()
+					}
 					if request.Method == http.MethodHead {
+						if failed && tc.headError != nil {
+							return httpclient.Response{}, tc.headError
+						}
 						status := 200
 						if failed {
 							status = tc.headStatus
@@ -122,21 +137,28 @@ func TestSendWatchRejectsInvalidPlaylistAndRenewsFailedPlayback(t *testing.T) {
 						return httpclient.Response{StatusCode: status}, nil
 					}
 					if failed {
+						if tc.getError != nil {
+							return httpclient.Response{}, tc.getError
+						}
 						return httpclient.Response{StatusCode: tc.status, Body: []byte(tc.body)}, nil
 					}
 					return httpclient.Response{StatusCode: 200, Body: []byte("#EXTM3U\nchunk.ts")}, nil
 				}},
 			})
 			tracker.AddChannel(domain.Channel{ID: 88, Login: "watcher", Stream: &domain.Stream{BroadcastID: 1234}})
-			if ok, err := tracker.SendWatch(context.Background(), 88); ok || err == nil {
+			if ok, err := tracker.SendWatch(ctx, 88); ok || err == nil {
 				t.Fatalf("无效播放响应不应报告成功: %v, %v", ok, err)
 			}
 			failed = false
 			if ok, err := tracker.SendWatch(context.Background(), 88); !ok || err != nil {
 				t.Fatalf("重新获取播放地址后应恢复: %v, %v", ok, err)
 			}
-			if tokenCalls != 2 {
-				t.Fatalf("播放失败后应更新凭据: %d", tokenCalls)
+			expectedTokenCalls := 2
+			if tc.cancelRequest {
+				expectedTokenCalls = 1
+			}
+			if tokenCalls != expectedTokenCalls {
+				t.Fatalf("播放凭据请求次数不匹配: got=%d want=%d", tokenCalls, expectedTokenCalls)
 			}
 		})
 	}

@@ -41,6 +41,9 @@ func (t *Tracker) SendWatch(ctx context.Context, channelID int64) (bool, error) 
 		Headers: http.Header{"Connection": {"close"}},
 	})
 	if err != nil {
+		if ctx.Err() == nil {
+			t.setStreamPlaylistURL(channel, "")
+		}
 		return false, fmt.Errorf("获取视频分片列表失败: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
@@ -55,6 +58,9 @@ func (t *Tracker) SendWatch(ctx context.Context, channelID int64) (bool, error) 
 	for _, chunkURL := range chunks {
 		response, err := t.httpClient.Do(ctx, httpclient.Request{Method: http.MethodHead, URL: chunkURL})
 		if err != nil {
+			if ctx.Err() == nil {
+				t.setStreamPlaylistURL(channel, "")
+			}
 			return false, fmt.Errorf("发送视频分片 HEAD 请求失败: %w", err)
 		}
 		if response.StatusCode != http.StatusOK {

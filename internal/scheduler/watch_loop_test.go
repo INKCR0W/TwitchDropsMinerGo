@@ -111,6 +111,56 @@ func TestShouldResolveProgressToleratesProgressAnywhereInWatchCycle(t *testing.T
 	}
 }
 
+func TestProgressFallbackPreservesMinuteRemainder(t *testing.T) {
+	t.Parallel()
+	for _, reward := range []bool{false, true} {
+		name := "timed drop"
+		if reward {
+			name = "reward campaign"
+		}
+		t.Run(name, func(t *testing.T) {
+			start := testTime()
+			now := start.Add(15200 * time.Millisecond)
+			game := domain.Game{ID: 1, Name: "Watched"}
+			spec := campaignSpec(start, "campaign-jitter", game, start.Add(-time.Hour), start.Add(time.Hour), nil)
+			spec.IsRewardCampaign = reward
+			campaign := mustCampaign(t, spec)
+			scheduler := newTestScheduler(t, testSchedulerOptions{now: func() time.Time { return now }})
+			scheduler.snapshot = snapshotFromCampaigns(campaign)
+			scheduler.wantedGames = []domain.Game{game}
+			scheduler.lastProgressAt = now
+			channel := domain.Channel{ID: 1, Login: "channel", Stream: &domain.Stream{Game: &game, DropsEnabled: true}}
+
+			for _, step := range []struct {
+				elapsed time.Duration
+				minutes int
+			}{
+				{34900 * time.Millisecond, 0},
+				{54900 * time.Millisecond, 0},
+				{74900 * time.Millisecond, 0},
+				{94900 * time.Millisecond, 1},
+				{114800 * time.Millisecond, 1},
+				{134800 * time.Millisecond, 1},
+				{154800 * time.Millisecond, 2},
+				{174700 * time.Millisecond, 2},
+				{194700 * time.Millisecond, 2},
+				{214700 * time.Millisecond, 3},
+				// 长时间没有成功上报时，不追补中断期间的整分钟
+				{625200 * time.Millisecond, 4},
+				{645200 * time.Millisecond, 4},
+			} {
+				now = start.Add(step.elapsed)
+				if scheduler.shouldResolveProgress() {
+					scheduler.resolveProgress(context.Background(), channel, true)
+				}
+				if got := campaign.Drop("campaign-jitter-drop").ExtraCurrentMinutes; got != step.minutes {
+					t.Fatalf("经过 %s 后分钟数不匹配: got=%d want=%d", step.elapsed, got, step.minutes)
+				}
+			}
+		})
+	}
+}
+
 func TestWatchLoopSkipsFallbackWhenProgressUpdatedAfterSend(t *testing.T) {
 	t.Parallel()
 

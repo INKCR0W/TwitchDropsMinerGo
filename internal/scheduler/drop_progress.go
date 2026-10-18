@@ -75,10 +75,16 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 			return false, false, false
 		}
 	}
+	// 保留不足一分钟的余数，避免轮询抖动累积；不补算长时间中断期间的整分钟
+	progressAt := now.UTC()
+	if !s.lastProgressAt.IsZero() && now.After(s.lastProgressAt) {
+		remainder := now.Sub(s.lastProgressAt) % time.Minute
+		progressAt = progressAt.Add(-remainder)
+	}
 	// 本地估算推进也算进度, 否则只靠本地计时的 reward 活动会被误判卡住
 	if activeCampaign.IsRewardCampaign {
 		completed := activeCampaign.BumpRewardMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
-		s.lastProgressAt = now.UTC()
+		s.lastProgressAt = progressAt
 		s.lastAdvanceAt = now.UTC()
 		s.logDropOverviewLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 		if completed {
@@ -88,7 +94,7 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 	}
 
 	reachedLimit := activeCampaign.BumpMinutes(now, channel, s.settings.EnableBadgesEmotes, false)
-	s.lastProgressAt = now.UTC()
+	s.lastProgressAt = progressAt
 	s.logDropOverviewLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 	return false, reachedLimit, true
 }
