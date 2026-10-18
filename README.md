@@ -38,6 +38,8 @@ docker compose up -d && docker compose logs -f miner
 
 镜像由 CI 构建并推送至 [Docker Hub](https://hub.docker.com/r/inkcrow/twitchdropsminergo)：`latest` 为最新正式版，`edge` 跟随 main，支持 amd64/arm64。更新：`docker compose pull && docker compose up -d`。
 
+下载的 `compose.yaml` 默认使用 `latest`。如需测试 main 的最新构建，将 `image` 改为 `inkcrow/twitchdropsminergo:edge`，再执行上面的更新命令。main 的 CI 全部通过并完成镜像发布后，`edge` 才会更新；`latest` 随 `v*` 版本标签发布更新。
+
 ### 方式二：从源码构建
 
 ```
@@ -117,7 +119,7 @@ docker compose up -d && docker compose logs -f miner
 几点须知：
 
 - 与 `proxy` 互斥：两者同时配置时以大陆模式为准，`proxy` 被忽略并在启动日志中告警。
-- PubSub（`pubsub-edge.twitch.tv`）在该模式下连不上，程序会自动退回既有的 GQL 轮询兜底。挖取和领取掉落不受影响，仅"刚开播 / 刚可领取"这类事件由实时推送变为最多 59 秒后轮询发现。
+- 若该网络下 PubSub（`pubsub-edge.twitch.tv`）无法连接，掉宝进度会使用 GQL 轮询兜底。开播、下播和可领取等事件可能延迟到后续状态同步或活动清单刷新时才被发现，不保证在固定秒数内同步。
 - 连接失败时会明确报错并指出是哪个域名、哪一步失败，不会静默回退。若日志显示持续失败，说明该网络环境不适用，请改用 `proxy`。
 - 各地区网络环境不同，且随时可能变化，该模式不保证长期可用。
 - 修改后重启生效。
