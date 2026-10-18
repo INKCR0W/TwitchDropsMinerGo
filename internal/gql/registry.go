@@ -59,7 +59,7 @@ var registry = map[OperationKey]Operation{
 	),
 	OperationInventory: NewOperation(
 		"Inventory",
-		"d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
+		"8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
 		map[string]any{
 			"fetchRewardCampaigns": false,
 		},
@@ -74,7 +74,7 @@ var registry = map[OperationKey]Operation{
 	),
 	OperationCampaigns: NewOperation(
 		"ViewerDropsDashboard",
-		"5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619",
+		"c16bb890cc8ce7647a96ee69cd313d423a378a3dedadf630a1017cde18975feb",
 		map[string]any{
 			"fetchRewardCampaigns": false,
 		},

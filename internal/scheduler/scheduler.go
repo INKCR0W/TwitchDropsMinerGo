@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	DefaultWatchInterval     = 59 * time.Second
-	DefaultProgressDelay     = 20 * time.Second
+	DefaultWatchInterval     = 20 * time.Second
+	DefaultProgressDelay     = 15 * time.Second
 	DefaultMaintenanceReload = 20 * time.Minute
 	DefaultErrorRetryDelay   = time.Minute
 	DefaultClaimSweepTimeout = 30 * time.Second

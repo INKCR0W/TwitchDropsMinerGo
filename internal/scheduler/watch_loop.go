@@ -95,7 +95,8 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 			s.logger.Warn("watch 请求未成功", "channel_id", channelID)
 		}
 
-		if err := s.sleepWithWatchSignal(ctx, s.progressDelay); err != nil {
+		delay := max(s.progressDelay-s.nowUTC().Sub(sentAt), 0)
+		if err := s.sleepWithWatchSignal(ctx, delay); err != nil {
 			if errors.Is(err, errWatchInterrupted) {
 				continue
 			}
@@ -219,7 +220,7 @@ func (s *Scheduler) fetchCurrentDrop(ctx context.Context, channelID int64) (stri
 	return dropID, int(int64Value(session, "currentMinutesWatched")), true, nil
 }
 
-// 只看进度多久没来, 不关心它落在周期里的哪个位置; 5/6 对齐上游的"一分钟倒计时留 10s 余量"
+// 观看请求可以频繁发送，进度查询和本地补分钟仍按一分钟计时
 func (s *Scheduler) shouldResolveProgress() bool {
 	if s == nil {
 		return false
@@ -229,7 +230,7 @@ func (s *Scheduler) shouldResolveProgress() bool {
 	lastProgressAt := s.lastProgressAt
 	s.mu.RUnlock()
 
-	return lastProgressAt.IsZero() || s.nowUTC().Sub(lastProgressAt) >= s.watchInterval/6*5
+	return lastProgressAt.IsZero() || s.nowUTC().Sub(lastProgressAt) >= time.Minute
 }
 
 func (s *Scheduler) waitForWatchingChannel(ctx context.Context) (int64, bool) {

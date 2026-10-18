@@ -178,15 +178,10 @@ func run(args []string) int {
 	}
 
 	tracker, err := watch.NewTracker(watch.Options{
-		GQLClient:   gqlClient,
-		SpadeClient: httpClient,
-		// spade 复用完整鉴权头(含 OAuth), 与 GQL 请求一致
-		WatchHeaders: authState.HeadersProvider(auth.HeadersOptions{
-			UserAgent: clientInfo.UserAgent,
-			GQL:       true,
-		}),
-		AuthState: authState,
-		Logger:    logger,
+		GQLClient:  gqlClient,
+		HTTPClient: httpClient,
+		AuthState:  authState,
+		Logger:     logger,
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 watch 跟踪器失败", err)

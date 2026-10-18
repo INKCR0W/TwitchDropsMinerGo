@@ -94,15 +94,15 @@ func TestShouldResolveProgressToleratesProgressAnywhereInWatchCycle(t *testing.T
 	now := testTime()
 	scheduler := newTestScheduler(t, testSchedulerOptions{})
 
-	scheduler.lastProgressAt = now.Add(-DefaultWatchInterval / 2)
+	scheduler.lastProgressAt = now.Add(-20 * time.Second)
 	if scheduler.shouldResolveProgress() {
-		t.Fatal("进度距今不足一个 watch 周期时不应再花一次 GQL 兜底")
+		t.Fatal("观看周期结束但未满一分钟时不应查询进度")
 	}
 
-	// 判定点每 watchInterval 才来一次, 阈值必须留出足够余量吸收 GQL 往返与调度抖动
-	scheduler.lastProgressAt = now.Add(-DefaultWatchInterval + 5*time.Second)
+	// 观看请求每 20 秒发送一次，本地补分钟不能随之加速
+	scheduler.lastProgressAt = now.Add(-time.Minute)
 	if !scheduler.shouldResolveProgress() {
-		t.Fatal("距上次进度只差 5s 就满一个周期时仍应走 GQL 兜底")
+		t.Fatal("距上次进度满一分钟时应走 GQL 兜底")
 	}
 
 	scheduler.lastProgressAt = time.Time{}

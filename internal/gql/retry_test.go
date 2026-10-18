@@ -83,43 +83,46 @@ func TestClientReturnsRequestErrorAfterSingleRetryIsConsumed(t *testing.T) {
 	}
 }
 
-func TestClientRetriesServiceUnavailableUntilSuccess(t *testing.T) {
+func TestClientRetriesTransientErrorsUntilSuccess(t *testing.T) {
 	t.Parallel()
+	for _, message := range []string{"service unavailable", "request cancelled"} {
+		t.Run(message, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				current := attempts.Add(1)
+				if current <= 2 {
+					_, _ = io.WriteString(w, `{"errors":[{"message":"`+message+`"}],"extensions":{"operationName":"Inventory"}}`)
+					return
+				}
 
-	var attempts atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		current := attempts.Add(1)
-		if current <= 2 {
-			_, _ = io.WriteString(w, `{"errors":[{"message":"service unavailable"}],"extensions":{"operationName":"Inventory"}}`)
-			return
-		}
+				_, _ = io.WriteString(w, `{"data":{"ok":true},"extensions":{"operationName":"Inventory"}}`)
+			}))
+			defer server.Close()
 
-		_, _ = io.WriteString(w, `{"data":{"ok":true},"extensions":{"operationName":"Inventory"}}`)
-	}))
-	defer server.Close()
+			var sleeps atomic.Int32
+			client, err := NewClient(ClientOptions{
+				HTTPClient: newTestHTTPClient(t),
+				Endpoint:   server.URL,
+				Limiter:    &stubLimiter{},
+				Sleep: func(context.Context, time.Duration) error {
+					sleeps.Add(1)
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("创建 GQL 客户端失败: %v", err)
+			}
 
-	var sleeps atomic.Int32
-	client, err := NewClient(ClientOptions{
-		HTTPClient: newTestHTTPClient(t),
-		Endpoint:   server.URL,
-		Limiter:    &stubLimiter{},
-		Sleep: func(context.Context, time.Duration) error {
-			sleeps.Add(1)
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("创建 GQL 客户端失败: %v", err)
-	}
-
-	if _, err := client.Do(context.Background(), MustLookup(OperationInventory)); err != nil {
-		t.Fatalf("Do 返回错误: %v", err)
-	}
-	if attempts.Load() != 3 {
-		t.Fatalf("重试次数不匹配: %d", attempts.Load())
-	}
-	if sleeps.Load() != 2 {
-		t.Fatalf("睡眠次数不匹配: %d", sleeps.Load())
+			if _, err := client.Do(context.Background(), MustLookup(OperationInventory)); err != nil {
+				t.Fatalf("Do 返回错误: %v", err)
+			}
+			if attempts.Load() != 3 {
+				t.Fatalf("重试次数不匹配: %d", attempts.Load())
+			}
+			if sleeps.Load() != 2 {
+				t.Fatalf("睡眠次数不匹配: %d", sleeps.Load())
+			}
+		})
 	}
 }
 

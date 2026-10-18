@@ -2,156 +2,142 @@ package watch
 
 import (
 	"context"
-	"encoding/base64"
+	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
-	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/domain"
+	"twitchdropsminergo/internal/gql"
+	"twitchdropsminergo/internal/httpclient"
 )
 
-func decodeWatchBody(t *testing.T, body []byte) string {
-	t.Helper()
-
-	form := string(body)
-	encoded, ok := strings.CutPrefix(form, "data=")
-	if !ok {
-		t.Fatalf("watch body 缺少 data= 前缀: %q", form)
-	}
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("base64 解码失败: %v", err)
-	}
-	return string(raw)
-}
-
-func TestBuildWatchBodyEncodesMinuteWatchedPayload(t *testing.T) {
+func TestSendWatchRequestsAllChunksAndCachesPlaylistPerBroadcast(t *testing.T) {
 	t.Parallel()
-
-	channel := &domain.Channel{
-		ID:    42,
-		Login: "streamer",
-		Stream: &domain.Stream{
-			BroadcastID: 99,
-			Game:        &domain.Game{ID: 7, Name: "Apex Legends"},
-		},
-	}
-
-	body, err := BuildWatchBody(channel, 777, "2026-07-10T18:45:54.509Z")
-	if err != nil {
-		t.Fatalf("BuildWatchBody 返回错误: %v", err)
-	}
-
-	got := decodeWatchBody(t, body)
-	expected := `[{"event":"minute-watched","properties":{"broadcast_id":"99","channel_id":"42","channel":"streamer","client_time":"2026-07-10T18:45:54.509Z","game":"Apex Legends","game_id":"7","hidden":false,"is_live":true,"live":true,"location":"channel","logged_in":true,"minutes_logged":1,"muted":false,"player":"site","user_id":777}}]`
-	if got != expected {
-		t.Fatalf("watch payload 不匹配:\n got=%s\nwant=%s", got, expected)
-	}
-}
-
-func TestBuildWatchBodyRejectsMissingBroadcast(t *testing.T) {
-	t.Parallel()
-
-	channel := &domain.Channel{ID: 42, Login: "streamer", Stream: &domain.Stream{}}
-	if _, err := BuildWatchBody(channel, 777, ""); err == nil {
-		t.Fatal("缺少 broadcast_id 时应返回错误")
-	}
-}
-
-func TestBuildWatchBodyOmitsGameWhenUnknown(t *testing.T) {
-	t.Parallel()
-
-	build := func(stream *domain.Stream) string {
-		body, err := BuildWatchBody(&domain.Channel{ID: 42, Login: "streamer", Stream: stream}, 777, "t")
-		if err != nil {
-			t.Fatalf("BuildWatchBody 返回错误: %v", err)
+	var tokenCalls int
+	var requests []string
+	client := &fakeHTTPClient{callFunc: func(request httpclient.Request) (httpclient.Response, error) {
+		requests = append(requests, request.Method+" "+strings.Split(request.URL, "?")[0])
+		if request.Headers.Get("Authorization") != "" {
+			t.Fatal("CDN 请求不应携带 OAuth")
 		}
-		return decodeWatchBody(t, body)
-	}
-
-	if got := build(&domain.Stream{BroadcastID: 99}); !strings.Contains(got, `"game":""`) || !strings.Contains(got, `"game_id":""`) {
-		t.Fatalf("game 未知时 game/game_id 应留空: %s", got)
-	}
-	if got := build(&domain.Stream{BroadcastID: 99, Game: &domain.Game{Name: "Special Events"}}); !strings.Contains(got, `"game":"Special Events"`) || !strings.Contains(got, `"game_id":""`) {
-		t.Fatalf("game_id 缺失时应仅留空 game_id: %s", got)
-	}
-}
-
-func TestSendWatchReturnsTrueOnStatusCode204(t *testing.T) {
-	t.Parallel()
-
-	spade := &fakeSpadeClient{status: 204}
+		switch {
+		case strings.HasPrefix(request.URL, "https://usher.ttvnw.net/"):
+			parsed, err := url.Parse(request.URL)
+			if err != nil {
+				return httpclient.Response{}, err
+			}
+			if parsed.Query().Get("token") != `{"token":"a+b&c"}` || parsed.Query().Get("sig") != "signature" {
+				t.Fatalf("播放凭据未正确编码: %s", parsed.RawQuery)
+			}
+			return httpclient.Response{StatusCode: 200, Body: []byte("#EXTM3U\nhttps://cdn.example/high.m3u8\nhttps://cdn.example/low.m3u8\n")}, nil
+		case request.URL == "https://cdn.example/low.m3u8":
+			if request.Headers.Get("Connection") != "close" {
+				t.Fatal("媒体播放列表应关闭连接")
+			}
+			return httpclient.Response{StatusCode: 200, Body: []byte("#EXTM3U\r\n#EXTINF:2,\r\none.ts\r\n#EXTINF:2,\r\nhttps://cdn.example/two.ts\r\n#EXT-X-ENDLIST\r\n")}, nil
+		case strings.HasSuffix(request.URL, ".ts"):
+			if request.Method != http.MethodHead {
+				t.Fatal("视频分片只应发送 HEAD")
+			}
+			return httpclient.Response{StatusCode: 200}, nil
+		default:
+			return httpclient.Response{}, fmt.Errorf("意外请求: %s", request.URL)
+		}
+	}}
 	tracker := newTestTracker(t, testTrackerOptions{
-		spadeClient: spade,
-		authState:   &fakeAuthState{snapshot: auth.Snapshot{UserID: 999, SessionID: "session", DeviceID: "device"}},
+		httpClient: client,
+		gqlClient: &fakeGQLClient{doFunc: func(_ context.Context, operation gql.Operation) (gql.Response, error) {
+			tokenCalls++
+			if operation.OperationName != "PlaybackAccessToken" || operation.Variables["login"] != "watcher" {
+				t.Fatalf("播放凭据请求错误: %#v", operation)
+			}
+			return gql.Response{Data: map[string]any{"streamPlaybackAccessToken": map[string]any{
+				"value": `{"token":"a+b&c"}`, "signature": "signature",
+			}}}, nil
+		}},
 	})
-	tracker.AddChannel(domain.Channel{
-		ID:    88,
-		Login: "watcher",
-		Stream: &domain.Stream{
-			BroadcastID: 1234,
-			Game:        &domain.Game{ID: 5, Name: "Rust"},
-		},
-	})
-
-	ok, err := tracker.SendWatch(context.Background(), 88)
-	if err != nil {
-		t.Fatalf("SendWatch 返回错误: %v", err)
-	}
-	if !ok {
-		t.Fatal("statusCode 204 应判定为 watch 成功")
-	}
-
-	req := spade.lastRequest()
-	if req.Method != http.MethodPost || req.URL != spadeTrackURL {
-		t.Fatalf("watch 应 POST 到 spade: %s %s", req.Method, req.URL)
-	}
-	if ct := req.Headers.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
-		t.Fatalf("Content-Type 不匹配: %q", ct)
-	}
-	got := decodeWatchBody(t, req.Body)
-	for _, want := range []string{`"broadcast_id":"1234"`, `"channel_id":"88"`, `"user_id":999`, `"location":"channel"`, `"player":"site"`, `"game":"Rust"`, `"game_id":"5"`, `"minutes_logged":1`} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("payload 缺少 %s: %s", want, got)
+	channel := domain.Channel{ID: 88, Login: "watcher", Stream: &domain.Stream{BroadcastID: 1234}}
+	tracker.AddChannel(channel)
+	for range 2 {
+		if ok, err := tracker.SendWatch(context.Background(), 88); err != nil || !ok {
+			t.Fatalf("SendWatch = %v, %v", ok, err)
 		}
 	}
-}
-
-func TestSendWatchReturnsFalseOnNonSuccessStatusCode(t *testing.T) {
-	t.Parallel()
-
-	tracker := newTestTracker(t, testTrackerOptions{
-		spadeClient: &fakeSpadeClient{status: 500},
-	})
-	tracker.AddChannel(domain.Channel{
-		ID:     88,
-		Login:  "watcher",
-		Stream: &domain.Stream{BroadcastID: 1234},
-	})
-
-	ok, err := tracker.SendWatch(context.Background(), 88)
-	if err != nil {
-		t.Fatalf("SendWatch 返回错误: %v", err)
+	if tokenCalls != 1 {
+		t.Fatalf("同一直播应复用播放地址，凭据请求次数: %d", tokenCalls)
 	}
-	if ok {
-		t.Fatal("非 204 状态码应判定为 watch 失败")
+	want := []string{
+		"GET https://usher.ttvnw.net/api/channel/hls/watcher.m3u8",
+		"GET https://cdn.example/low.m3u8", "HEAD https://cdn.example/one.ts", "HEAD https://cdn.example/two.ts",
+		"GET https://cdn.example/low.m3u8", "HEAD https://cdn.example/one.ts", "HEAD https://cdn.example/two.ts",
+	}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("观看请求顺序错误: %#v", requests)
+	}
+	channel.Stream.BroadcastID++
+	tracker.AddChannel(channel)
+	if ok, err := tracker.SendWatch(context.Background(), 88); err != nil || !ok {
+		t.Fatalf("新直播 SendWatch = %v, %v", ok, err)
+	}
+	if tokenCalls != 2 {
+		t.Fatalf("新直播应重新获取播放凭据，次数: %d", tokenCalls)
 	}
 }
 
-func TestSendWatchSetsContentTypeOnClonedHeaders(t *testing.T) {
+func TestSendWatchRejectsInvalidPlaylistAndRenewsFailedPlayback(t *testing.T) {
 	t.Parallel()
-
-	shared := http.Header{}
-	spade := &fakeSpadeClient{status: 204}
-	tracker := newTestTracker(t, testTrackerOptions{spadeClient: spade})
-	tracker.watchHeaders = func(context.Context) (http.Header, error) { return shared, nil }
-	tracker.AddChannel(domain.Channel{ID: 88, Login: "watcher", Stream: &domain.Stream{BroadcastID: 1234}})
-
-	if _, err := tracker.SendWatch(context.Background(), 88); err != nil {
-		t.Fatalf("SendWatch 返回错误: %v", err)
-	}
-	if shared.Get("Content-Type") != "" {
-		t.Fatal("不应污染共享的 headers, 应在副本上设置 Content-Type")
+	for _, tc := range []struct {
+		name       string
+		body       string
+		status     int
+		headStatus int
+	}{
+		{name: "expired", status: 403},
+		{name: "offline", status: 404},
+		{name: "json error", status: 200, body: `[{"error":"access denied"}]`},
+		{name: "empty playlist", status: 200, body: "#EXTM3U\n#EXT-X-ENDLIST"},
+		{name: "invalid scheme", status: 200, body: "#EXTM3U\nfile:///chunk.ts"},
+		{name: "failed chunk", status: 200, body: "#EXTM3U\nchunk.ts", headStatus: 404},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failed := true
+			tokenCalls := 0
+			tracker := newTestTracker(t, testTrackerOptions{
+				gqlClient: &fakeGQLClient{doFunc: func(context.Context, gql.Operation) (gql.Response, error) {
+					tokenCalls++
+					return gql.Response{Data: map[string]any{"streamPlaybackAccessToken": map[string]any{"value": "token", "signature": "sig"}}}, nil
+				}},
+				httpClient: &fakeHTTPClient{callFunc: func(request httpclient.Request) (httpclient.Response, error) {
+					if strings.HasPrefix(request.URL, "https://usher.ttvnw.net/") {
+						return httpclient.Response{StatusCode: 200, Body: []byte("#EXTM3U\nhttps://cdn.example/live.m3u8")}, nil
+					}
+					if request.Method == http.MethodHead {
+						status := 200
+						if failed {
+							status = tc.headStatus
+						}
+						return httpclient.Response{StatusCode: status}, nil
+					}
+					if failed {
+						return httpclient.Response{StatusCode: tc.status, Body: []byte(tc.body)}, nil
+					}
+					return httpclient.Response{StatusCode: 200, Body: []byte("#EXTM3U\nchunk.ts")}, nil
+				}},
+			})
+			tracker.AddChannel(domain.Channel{ID: 88, Login: "watcher", Stream: &domain.Stream{BroadcastID: 1234}})
+			if ok, err := tracker.SendWatch(context.Background(), 88); ok || err == nil {
+				t.Fatalf("无效播放响应不应报告成功: %v, %v", ok, err)
+			}
+			failed = false
+			if ok, err := tracker.SendWatch(context.Background(), 88); !ok || err != nil {
+				t.Fatalf("重新获取播放地址后应恢复: %v, %v", ok, err)
+			}
+			if tokenCalls != 2 {
+				t.Fatalf("播放失败后应更新凭据: %d", tokenCalls)
+			}
+		})
 	}
 }

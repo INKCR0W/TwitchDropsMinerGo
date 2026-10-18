@@ -2,19 +2,16 @@ package watch
 
 import (
 	"context"
-	"net/http"
-	"sync"
 	"testing"
 	"time"
 
-	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/gql"
 	"twitchdropsminergo/internal/httpclient"
 )
 
 type testTrackerOptions struct {
 	gqlClient   GQLClient
-	spadeClient SpadeClient
+	httpClient  HTTPClient
 	authState   AuthState
 	sleep       func(context.Context, time.Duration) error
 	onlineDelay time.Duration
@@ -35,30 +32,23 @@ func newTestTracker(t *testing.T, options testTrackerOptions) *Tracker {
 		}
 	}
 
-	spadeClient := options.spadeClient
-	if spadeClient == nil {
-		spadeClient = &fakeSpadeClient{}
+	httpClient := options.httpClient
+	if httpClient == nil {
+		httpClient = &fakeHTTPClient{}
 	}
 
 	authState := options.authState
 	if authState == nil {
-		authState = &fakeAuthState{
-			snapshot: auth.Snapshot{
-				UserID:    1,
-				SessionID: "session",
-				DeviceID:  "device",
-			},
-		}
+		authState = &fakeAuthState{}
 	}
 
 	tracker, err := NewTracker(Options{
-		GQLClient:    gqlClient,
-		SpadeClient:  spadeClient,
-		WatchHeaders: func(context.Context) (http.Header, error) { return http.Header{}, nil },
-		AuthState:    authState,
-		OnlineDelay:  options.onlineDelay,
-		Clock:        testNow,
-		Sleep:        options.sleep,
+		GQLClient:   gqlClient,
+		HTTPClient:  httpClient,
+		AuthState:   authState,
+		OnlineDelay: options.onlineDelay,
+		Clock:       testNow,
+		Sleep:       options.sleep,
 	})
 	if err != nil {
 		t.Fatalf("NewTracker 返回错误: %v", err)
@@ -91,51 +81,20 @@ func (f *fakeGQLClient) DoBatch(ctx context.Context, operations []gql.Operation)
 	return f.doBatchFunc(ctx, operations)
 }
 
-type fakeSpadeClient struct {
-	mu       sync.Mutex
-	lastReq  httpclient.Request
-	status   int
-	err      error
+type fakeHTTPClient struct {
 	callFunc func(httpclient.Request) (httpclient.Response, error)
 }
 
-func (f *fakeSpadeClient) Do(_ context.Context, request httpclient.Request) (httpclient.Response, error) {
-	f.mu.Lock()
-	f.lastReq = request
-	f.mu.Unlock()
+func (f *fakeHTTPClient) Do(_ context.Context, request httpclient.Request) (httpclient.Response, error) {
 	if f.callFunc != nil {
 		return f.callFunc(request)
 	}
-	if f.err != nil {
-		return httpclient.Response{}, f.err
-	}
-	status := f.status
-	if status == 0 {
-		status = 204
-	}
-	return httpclient.Response{StatusCode: status}, nil
+	return httpclient.Response{StatusCode: 200}, nil
 }
 
-func (f *fakeSpadeClient) lastRequest() httpclient.Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lastReq
-}
+type fakeAuthState struct{}
 
-type fakeAuthState struct {
-	mu       sync.Mutex
-	snapshot auth.Snapshot
-}
-
-func (f *fakeAuthState) Validate(context.Context) error {
-	return nil
-}
-
-func (f *fakeAuthState) Snapshot() auth.Snapshot {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.snapshot
-}
+func (f *fakeAuthState) Validate(context.Context) error { return nil }
 
 func testNow() time.Time {
 	return time.Date(2026, 4, 11, 8, 0, 0, 0, time.UTC)

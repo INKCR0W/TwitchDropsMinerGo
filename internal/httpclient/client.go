@@ -208,6 +208,13 @@ func (c *Client) Do(ctx context.Context, request Request) (Response, error) {
 
 		httpResponse, err := c.httpClient.Do(httpRequest)
 		if err != nil {
+			// 播放列表 URL 带有签名凭据，网络错误也不能将查询参数写入日志
+			var urlError *url.Error
+			if errors.As(err, &urlError) {
+				redacted := *urlError
+				redacted.URL = sanitizeURL(urlError.URL)
+				err = &redacted
+			}
 			if !isRetryableRequestError(err) {
 				return Response{}, fmt.Errorf("请求失败: %w", err)
 			}

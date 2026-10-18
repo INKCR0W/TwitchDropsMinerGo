@@ -211,6 +211,23 @@ func TestClientLogsRetryDetailsWithoutQueryString(t *testing.T) {
 	if !strings.Contains(logs, "/foo") {
 		t.Fatalf("日志缺少路径信息: %q", logs)
 	}
+
+	// 网络错误自身也包含 URL，需同时检查重试日志和最终错误
+	server.Close()
+	logBuffer.Reset()
+	client.maxAttempts = 2
+	client.sleep = func(context.Context, time.Duration) error { return nil }
+	_, err = client.Do(context.Background(), Request{
+		Method: http.MethodGet,
+		URL:    server.URL + "/foo?token=secret&sig=signature",
+	})
+	if err == nil {
+		t.Fatal("断开连接后应返回错误")
+	}
+	if strings.Contains(logBuffer.String(), "secret") || strings.Contains(err.Error(), "secret") ||
+		strings.Contains(logBuffer.String(), "signature") || strings.Contains(err.Error(), "signature") {
+		t.Fatalf("网络错误泄露播放凭据: logs=%q error=%v", logBuffer.String(), err)
+	}
 }
 
 func TestClientUsesConfiguredProxy(t *testing.T) {

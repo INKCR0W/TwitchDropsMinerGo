@@ -33,7 +33,7 @@ func (c *Client) handleResponses(responses []Response, allowSingleRetry bool) (r
 					if err := nullifyPath(response, responseError.Path); err != nil {
 						return false, false, 0, newRequestError(*response)
 					}
-				case "service timeout", "service unavailable", "context deadline exceeded":
+				case "service timeout", "request cancelled", "service unavailable", "context deadline exceeded":
 					return true, false, 0, nil
 				default:
 					allHandled = false
