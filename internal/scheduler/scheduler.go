@@ -159,6 +159,8 @@ type Scheduler struct {
 	selectedChannelID        int64
 	watchingChannelID        int64
 	lastProgressAt           time.Time
+	progressPushDeadline     time.Time
+	lastProgressPollAt       time.Time
 	lastAdvanceAt            time.Time
 	stalledChannels          map[int64]time.Time
 	announcedProgressDropIDs map[string]struct{}

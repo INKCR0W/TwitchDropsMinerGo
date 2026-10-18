@@ -145,6 +145,8 @@ func (s *Scheduler) removeChannels(channelIDs []int64) {
 		if s.watchingChannelID == channelID {
 			s.watchingChannelID = 0
 			s.lastProgressAt = time.Time{}
+			s.progressPushDeadline = time.Time{}
+			s.lastProgressPollAt = time.Time{}
 			s.lastAdvanceAt = time.Time{}
 		}
 		streamStateKey, _ := pubsub.TopicKey(pubsub.CategoryChannel, pubsub.TopicStreamState, channelID)

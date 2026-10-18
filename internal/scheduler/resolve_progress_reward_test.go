@@ -122,6 +122,7 @@ func TestResolveProgressRetriesRewardCompletionWhenPersistFails(t *testing.T) {
 	})
 	progressStore := &fakeRewardProgressStore{err: errAssert}
 	scheduler := newTestScheduler(t, testSchedulerOptions{
+		now:            func() time.Time { return now },
 		rewardProgress: progressStore,
 		gqlClient: &fakeGQLClient{
 			doFunc: func(ctx context.Context, operation gql.Operation) (gql.Response, error) {
@@ -159,6 +160,7 @@ func TestResolveProgressRetriesRewardCompletionWhenPersistFails(t *testing.T) {
 	}
 
 	progressStore.err = nil
+	now = now.Add(time.Minute)
 	scheduler.resolveProgress(context.Background(), channel, true)
 	if scheduler.State() != StateInventoryFetch {
 		t.Fatalf("保存恢复后应刷新 inventory: %s", scheduler.State())

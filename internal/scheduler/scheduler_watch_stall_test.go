@@ -1,12 +1,51 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/domain"
+	"twitchdropsminergo/internal/gql"
 )
+
+func TestWatchStallPollsBeforeEvictingDuringPushWait(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		minutes int
+		stalled bool
+	}{
+		{name: "advancing", minutes: 6},
+		{name: "unchanged", minutes: 5, stalled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := testTime()
+			scheduler, channel := newStallScheduler(t, now)
+			scheduler.now = func() time.Time { return now }
+			scheduler.settings.WatchStallMinutes = 1
+			scheduler.watchingChannelID = 0
+			scheduler.watch(channel.ID)
+			polls := 0
+			current := currentDropGQLClient("campaign-stall-drop", tc.minutes)
+			scheduler.gqlClient = &fakeGQLClient{doFunc: func(ctx context.Context, op gql.Operation) (gql.Response, error) {
+				polls++
+				return current.Do(ctx, op)
+			}}
+
+			now = now.Add(time.Minute)
+			scheduler.resolveProgress(context.Background(), channel, true)
+			scheduler.checkWatchStall(channel.ID, true)
+			if polls != 1 {
+				t.Fatalf("判定频道卡住前应查询一次真实进度: %d", polls)
+			}
+			if got := scheduler.channelStalled(channel.ID, now); got != tc.stalled {
+				t.Fatalf("频道回避状态不匹配: got=%v want=%v", got, tc.stalled)
+			}
+		})
+	}
+}
 
 func stallTestChannel(game domain.Game) domain.Channel {
 	return domain.Channel{

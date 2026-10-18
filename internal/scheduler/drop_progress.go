@@ -17,6 +17,11 @@ func (s *Scheduler) processDropProgress(message dropEventMessage) {
 	if !s.applyDropProgress(s.nowUTC(), watchingChannel, message.Data.DropID, message.Data.CurrentProgressMin) {
 		return
 	}
+	s.mu.Lock()
+	if s.watchingChannelID == watchingChannel.ID {
+		s.progressPushDeadline = s.nowUTC().Add(progressPushTimeout)
+	}
+	s.mu.Unlock()
 
 	attrs := []any{
 		"drop_id", message.Data.DropID,
@@ -74,6 +79,10 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 		if activeCampaign == nil {
 			return false, false, false
 		}
+	}
+	// 普通掉宝先等待真实进度，reward 活动仍需按分钟累计本地观看时间
+	if now.Before(s.progressPushDeadline) && !activeCampaign.IsRewardCampaign {
+		return false, false, false
 	}
 	// 保留不足一分钟的余数，避免轮询抖动累积；不补算长时间中断期间的整分钟
 	progressAt := now.UTC()

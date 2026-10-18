@@ -13,6 +13,8 @@ import (
 
 var errWatchInterrupted = errors.New("watch 循环被中断")
 
+const progressPushTimeout = 120 * time.Second
+
 func (s *Scheduler) watch(channelID int64) {
 	var (
 		channel domain.Channel
@@ -24,7 +26,11 @@ func (s *Scheduler) watch(channelID int64) {
 	s.watchingChannelID = channelID
 	if changed {
 		s.resetProgressAnnouncementsLocked()
-		s.lastAdvanceAt = s.now().UTC()
+		now := s.nowUTC()
+		s.lastAdvanceAt = now
+		s.lastProgressAt = now
+		s.progressPushDeadline = now.Add(progressPushTimeout)
+		s.lastProgressPollAt = time.Time{}
 	}
 	channel, ok = s.channels[channelID]
 	s.mu.Unlock()
@@ -52,6 +58,8 @@ func (s *Scheduler) stopWatching() {
 	channel, ok = s.channels[channelID]
 	s.watchingChannelID = 0
 	s.lastProgressAt = time.Time{}
+	s.progressPushDeadline = time.Time{}
+	s.lastProgressPollAt = time.Time{}
 	s.lastAdvanceAt = time.Time{}
 	s.mu.Unlock()
 
@@ -104,9 +112,7 @@ func (s *Scheduler) watchLoop(ctx context.Context) {
 		}
 
 		stateBefore := s.State()
-		if s.shouldResolveProgress() {
-			s.resolveProgress(ctx, channel, watchReported)
-		}
+		s.resolveProgress(ctx, channel, watchReported)
 		if s.State() == stateBefore {
 			s.checkWatchStall(channelID, watchReported)
 		}
@@ -128,12 +134,12 @@ func (s *Scheduler) resolveProgress(ctx context.Context, channel domain.Channel,
 	// 统一用进入本轮的时刻打进度戳, 否则 GQL 往返耗时会吃掉下一轮兜底的余量
 	now := s.nowUTC()
 
-	if s.syncProgressFromGQL(ctx, now, channel) {
+	if s.beginProgressPoll(now) && s.syncProgressFromGQL(ctx, now, channel) {
 		s.refreshWhenChannelExhausted(now, channel)
 		return
 	}
 
-	if !watchReported {
+	if !watchReported || !s.shouldEstimateProgress() {
 		return
 	}
 
@@ -220,8 +226,24 @@ func (s *Scheduler) fetchCurrentDrop(ctx context.Context, channelID int64) (stri
 	return dropID, int(int64Value(session, "currentMinutesWatched")), true, nil
 }
 
-// 观看请求可以频繁发送，进度查询和本地补分钟仍按一分钟计时
-func (s *Scheduler) shouldResolveProgress() bool {
+// 推送超时或即将判定频道卡住时查询进度，查询失败同样遵守一分钟间隔
+func (s *Scheduler) beginProgressPoll(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stallTimeout := time.Duration(s.settings.WatchStallMinutes) * time.Minute
+	stallDue := stallTimeout > 0 && !s.lastAdvanceAt.IsZero() && now.Sub(s.lastAdvanceAt) >= stallTimeout
+	if !stallDue && now.Before(s.progressPushDeadline) {
+		return false
+	}
+	if !s.lastProgressPollAt.IsZero() && now.Sub(s.lastProgressPollAt) < time.Minute {
+		return false
+	}
+	s.lastProgressPollAt = now
+	return true
+}
+
+// 本地补分钟独立于推送等待和轮询间隔
+func (s *Scheduler) shouldEstimateProgress() bool {
 	if s == nil {
 		return false
 	}
