@@ -48,6 +48,9 @@ type Options struct {
 
 type RefreshOptions struct {
 	EnableBadgesEmotes bool
+	ExcludedGames      []string
+	PriorityGames      []string
+	PriorityOnly       bool
 }
 
 type Snapshot struct {
@@ -222,6 +225,11 @@ func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapsh
 		return Snapshot{}, err
 	}
 
+	if r.discoveryMode == DiscoveryCatalog {
+		if err := r.resolveCatalogAccounts(ctx, mergedPayload, options); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	r.filterCatalogCampaigns(mergedPayload)
 	now := r.now().UTC()
 	rewardPayload, err := r.fetchRewardCampaigns(ctx, now)

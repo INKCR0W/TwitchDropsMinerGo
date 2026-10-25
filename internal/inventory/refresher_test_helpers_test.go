@@ -13,6 +13,7 @@ import (
 
 type fakeGQLClient struct {
 	mu          sync.Mutex
+	rawFunc     func(context.Context, gql.RawQuery) (gql.Response, error)
 	doFunc      func(context.Context, gql.Operation) (gql.Response, error)
 	doBatchFunc func(context.Context, []gql.Operation) ([]gql.Response, error)
 	batchSizes  []int
@@ -171,4 +172,11 @@ func formatTime(value time.Time) string {
 
 func testNow() time.Time {
 	return time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
+}
+
+func (f *fakeGQLClient) DoRaw(ctx context.Context, query gql.RawQuery) (gql.Response, error) {
+	if f.rawFunc == nil {
+		return gql.Response{}, fmt.Errorf("缺少 DoRaw 模拟实现")
+	}
+	return f.rawFunc(ctx, query)
 }

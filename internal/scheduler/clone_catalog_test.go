@@ -39,13 +39,13 @@ func TestCatalogAccountStateSurvivesSnapshotCloneAndGameSelection(t *testing.T) 
 	wanted := computeLegacyWantedGames(cloned.Inventory, now, now.Add(time.Hour), config.Settings{
 		PriorityMode: config.EndingSoonest, Priority: []string{"inventory-linked"},
 	})
-	if len(wanted) != 3 || wanted[0].Name != "inventory-linked" || wanted[1].Name != "catalog-unknown" || wanted[2].Name != "catalog-another" {
+	if len(wanted) != 1 || wanted[0].Name != "inventory-linked" {
 		t.Fatalf("snapshot clone changed account eligibility: %+v", wanted)
 	}
 	wanted = computeLegacyWantedGames(cloned.Inventory, now, now.Add(time.Hour), config.Settings{
 		PriorityMode: config.PriorityOnly, Priority: []string{"catalog-another"},
 	})
-	if len(wanted) != 1 || wanted[0].Name != "catalog-another" {
-		t.Fatalf("catalog ignored priority-only selection: %+v", wanted)
+	if len(wanted) != 0 {
+		t.Fatalf("unknown catalog account entered priority-only selection: %+v", wanted)
 	}
 }

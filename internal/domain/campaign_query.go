@@ -63,7 +63,7 @@ func (c *DropsCampaign) Eligible(enableBadgesEmotes bool) bool {
 	if c.HasBadgeOrEmote() {
 		return enableBadgesEmotes
 	}
-	return c.Linked || c.AccountConnectionUnknown
+	return c.Linked
 }
 
 func (c *DropsCampaign) HasBadgeOrEmote() bool {

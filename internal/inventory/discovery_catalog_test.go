@@ -127,8 +127,8 @@ func TestCatalogFindsFinalsBeyondFirstTwentyWithoutAccountData(t *testing.T) {
 		t.Fatal(err)
 	}
 	resultDrop := result.TimedDrops["bebe-sticker"]
-	if result.Game.Name != "THE FINALS" || result.Linked || !result.AccountConnectionUnknown || !result.CanEarn(testNow(), nil, false, false) {
-		t.Fatalf("unknown account state was treated as linked or ineligible: %+v", result)
+	if result.Game.Name != "THE FINALS" || result.Linked || !result.AccountConnectionUnknown || result.CanEarn(testNow(), nil, false, false) {
+		t.Fatalf("unknown account state was treated as eligible: %+v", result)
 	}
 	if resultDrop.IsClaimed || resultDrop.RealCurrentMinutes != 0 || resultDrop.ClaimID != "" {
 		t.Fatalf("source progress leaked into user state: %+v", resultDrop)

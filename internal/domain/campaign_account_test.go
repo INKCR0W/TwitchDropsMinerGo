@@ -9,7 +9,7 @@ func TestCampaignUnknownAccountDoesNotChangeDefaultUnlinkedBehavior(t *testing.T
 		eligible bool
 	}{
 		{false, false, false},
-		{false, true, true},
+		{false, true, false},
 		{true, false, true},
 	} {
 		campaign, err := NewCampaign(CampaignSpec{Linked: test.linked, AccountConnectionUnknown: test.unknown})
