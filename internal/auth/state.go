@@ -74,7 +74,7 @@ func New(options Options) (*State, error) {
 
 	clientInfo := options.ClientInfo
 	if clientInfo == (httpclient.ClientInfo{}) {
-		clientInfo = httpclient.AndroidAppClient
+		clientInfo = httpclient.TVAppClient
 	}
 	if strings.TrimSpace(clientInfo.ClientURL) == "" {
 		return nil, fmt.Errorf("认证客户端 URL 不能为空")

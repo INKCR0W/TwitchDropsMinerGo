@@ -16,6 +16,13 @@ import (
 
 const defaultChunkSize = 20
 
+type DiscoveryMode string
+
+const (
+	DiscoveryDashboard DiscoveryMode = ""
+	DiscoveryChannels  DiscoveryMode = "channels"
+)
+
 type GQLClient interface {
 	Do(context.Context, gql.Operation) (gql.Response, error)
 	DoBatch(context.Context, []gql.Operation) ([]gql.Response, error)
@@ -33,10 +40,14 @@ type Options struct {
 	Clock          func() time.Time
 	ChunkSize      int
 	Logger         *slog.Logger
+	DiscoveryMode  DiscoveryMode
 }
 
 type RefreshOptions struct {
 	EnableBadgesEmotes bool
+	DiscoveryGames     []string
+	DiscoveryExcludes  []string
+	GlobalDiscovery    bool
 }
 
 type Snapshot struct {
@@ -55,6 +66,11 @@ type Refresher struct {
 	rewardProgressMinutes map[string]int
 	now                   func() time.Time
 	chunkSize             int
+	discoveryMode         DiscoveryMode
+	discoveryMu           sync.Mutex
+	discoveryCursor       string
+	discoveredCampaigns   map[string]any
+	discoveryGameSlugs    map[string]string
 }
 
 func NewRefresher(options Options) (*Refresher, error) {
@@ -63,6 +79,9 @@ func NewRefresher(options Options) (*Refresher, error) {
 	}
 	if options.AuthState == nil {
 		return nil, fmt.Errorf("inventory 认证状态不能为空")
+	}
+	if options.DiscoveryMode != DiscoveryDashboard && options.DiscoveryMode != DiscoveryChannels {
+		return nil, fmt.Errorf("未知活动发现模式: %s", options.DiscoveryMode)
 	}
 
 	now := options.Clock
@@ -91,6 +110,7 @@ func NewRefresher(options Options) (*Refresher, error) {
 		rewardProgressMinutes: rewardProgressMinutes,
 		now:                   now,
 		chunkSize:             chunkSize,
+		discoveryMode:         options.DiscoveryMode,
 	}, nil
 }
 
@@ -172,13 +192,16 @@ func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapsh
 	if err != nil {
 		return Snapshot{}, err
 	}
-
-	availableCampaigns, err := r.fetchAvailableCampaigns(ctx)
-	if err != nil {
-		return Snapshot{}, err
+	var mergedPayload map[string]any
+	if r.discoveryMode == DiscoveryChannels {
+		mergedPayload, err = r.fetchChannelCampaigns(ctx, inventoryPayload, options)
+	} else {
+		var availableCampaigns []campaignEnvelope
+		availableCampaigns, err = r.fetchAvailableCampaigns(ctx)
+		if err == nil {
+			mergedPayload, err = r.fetchCampaignDetails(ctx, authSnapshot.UserID, inventoryPayload, availableCampaigns)
+		}
 	}
-
-	mergedPayload, err := r.fetchCampaignDetails(ctx, authSnapshot.UserID, inventoryPayload, availableCampaigns)
 	if err != nil {
 		return Snapshot{}, err
 	}

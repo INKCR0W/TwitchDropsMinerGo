@@ -117,7 +117,7 @@ func run(args []string) int {
 
 	mainlandDialer := newMainlandDialer(application.Settings(), logger)
 
-	clientInfo := httpclient.AndroidAppClient
+	clientInfo := httpclient.TVAppClient
 	httpClient, err := httpclient.New(httpclient.Options{
 		Logger:         logger,
 		Settings:       application.Settings(),
@@ -168,6 +168,7 @@ func run(args []string) int {
 	}
 
 	refresher, err := inventory.NewRefresher(inventory.Options{
+		DiscoveryMode:  inventory.DiscoveryChannels,
 		GQLClient:      gqlClient,
 		AuthState:      authState,
 		RewardProgress: rewardProgress.Snapshot(),

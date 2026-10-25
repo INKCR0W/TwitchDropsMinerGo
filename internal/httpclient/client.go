@@ -32,6 +32,13 @@ var AndroidAppClient = ClientInfo{
 	UserAgent: "Dalvik/2.1.0 (Linux; U; Android 16; SM-S911B Build/TP1A.220624.014) tv.twitch.android.app/25.3.0/2503006",
 }
 
+// TV 客户端支持设备码授权；Android 客户端使用内嵌网页登录
+var TVAppClient = ClientInfo{
+	ClientURL: "https://www.twitch.tv",
+	ClientID:  "ue6666qo983tsx6so1t0vnawi233wa",
+	UserAgent: "Mozilla/5.0 (Linux; Android 9; SHIELD Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0 Safari/537.36",
+}
+
 type Options struct {
 	Logger      *slog.Logger
 	Settings    config.Settings
@@ -84,7 +91,7 @@ func New(options Options) (*Client, error) {
 
 	info := options.ClientInfo
 	if info == (ClientInfo{}) {
-		info = AndroidAppClient
+		info = TVAppClient
 	}
 
 	backoff := options.Backoff

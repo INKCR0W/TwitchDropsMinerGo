@@ -46,6 +46,29 @@ func newTestHTTPClient(t *testing.T) *httpclient.Client {
 	return client
 }
 
+func TestClientDefaultsToTVIdentity(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Client-Id") != httpclient.TVAppClient.ClientID {
+			t.Error("默认 GQL Client-ID 必须与 TV 设备授权一致")
+		}
+		if r.Header.Get("User-Agent") != httpclient.TVAppClient.UserAgent {
+			t.Error("默认 GQL User-Agent 必须与 TV 设备授权一致")
+		}
+		_, _ = io.WriteString(w, `{"data":{"currentUser":{"id":"42"}}}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientOptions{
+		HTTPClient: newTestHTTPClient(t), Endpoint: server.URL, Limiter: &stubLimiter{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DoRaw(context.Background(), RawQuery{Query: `{currentUser{id}}`}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientDoAddsHeadersAndReturnsResponse(t *testing.T) {
 	t.Parallel()
 

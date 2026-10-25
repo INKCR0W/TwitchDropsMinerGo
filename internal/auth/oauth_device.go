@@ -168,16 +168,18 @@ func (s *State) pollAccessToken(ctx context.Context, headers http.Header, device
 func parseTokenPollingResponse(body []byte, currentInterval time.Duration) (time.Duration, bool, error) {
 	var tokenError tokenErrorResponse
 	if err := json.Unmarshal(body, &tokenError); err != nil {
-		return currentInterval, false, nil
+		return currentInterval, false, fmt.Errorf("解析 token 轮询错误响应失败: %w", err)
 	}
 
 	switch firstNonEmpty(tokenError.Error, tokenError.Message) {
-	case "authorization_pending", "":
+	case "authorization_pending":
 		return currentInterval, false, nil
 	case "slow_down":
 		return currentInterval + 5*time.Second, false, nil
 	case "expired_token":
 		return currentInterval, true, nil
+	case "":
+		return currentInterval, false, fmt.Errorf("token 轮询错误响应缺少错误原因")
 	default:
 		return currentInterval, false, fmt.Errorf("轮询 access token 失败: %s", firstNonEmpty(tokenError.Error, tokenError.Message))
 	}
