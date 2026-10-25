@@ -167,12 +167,27 @@ func run(args []string) int {
 		return failRun(application, logger, "初始化观看进度存储失败", err)
 	}
 
+	catalogClient, err := httpclient.New(httpclient.Options{
+		Logger: logger, Settings: application.Settings(),
+		ClientInfo:     httpclient.ClientInfo{UserAgent: "TwitchDropsMinerGo"},
+		DialTLSContext: mainlandDialerTLS(mainlandDialer),
+	})
+	if err != nil {
+		return failRun(application, logger, "初始化公共目录 HTTP 客户端失败", err)
+	}
+	defer func() {
+		if closeErr := catalogClient.Close(); closeErr != nil {
+			logger.Warn("关闭公共目录 HTTP 客户端失败", "error", closeErr)
+		}
+	}()
+
 	refresher, err := inventory.NewRefresher(inventory.Options{
-		DiscoveryMode:  inventory.DiscoveryChannels,
-		GQLClient:      gqlClient,
-		AuthState:      authState,
-		RewardProgress: rewardProgress.Snapshot(),
-		Logger:         logger,
+		CatalogHTTPClient: catalogClient,
+		DiscoveryMode:     inventory.DiscoveryCatalog,
+		GQLClient:         gqlClient,
+		AuthState:         authState,
+		RewardProgress:    rewardProgress.Snapshot(),
+		Logger:            logger,
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 inventory 刷新器失败", err)

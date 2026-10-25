@@ -11,6 +11,7 @@ import (
 	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
+	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/rewards"
 )
 
@@ -20,7 +21,7 @@ type DiscoveryMode string
 
 const (
 	DiscoveryDashboard DiscoveryMode = ""
-	DiscoveryChannels  DiscoveryMode = "channels"
+	DiscoveryCatalog   DiscoveryMode = "catalog"
 )
 
 type GQLClient interface {
@@ -34,20 +35,19 @@ type AuthState interface {
 }
 
 type Options struct {
-	GQLClient      GQLClient
-	AuthState      AuthState
-	RewardProgress map[string]rewards.Progress
-	Clock          func() time.Time
-	ChunkSize      int
-	Logger         *slog.Logger
-	DiscoveryMode  DiscoveryMode
+	GQLClient         GQLClient
+	AuthState         AuthState
+	RewardProgress    map[string]rewards.Progress
+	Clock             func() time.Time
+	ChunkSize         int
+	Logger            *slog.Logger
+	DiscoveryMode     DiscoveryMode
+	CatalogHTTPClient *httpclient.Client
+	CatalogEndpoint   string
 }
 
 type RefreshOptions struct {
 	EnableBadgesEmotes bool
-	DiscoveryGames     []string
-	DiscoveryExcludes  []string
-	GlobalDiscovery    bool
 }
 
 type Snapshot struct {
@@ -67,10 +67,8 @@ type Refresher struct {
 	now                   func() time.Time
 	chunkSize             int
 	discoveryMode         DiscoveryMode
-	discoveryMu           sync.Mutex
-	discoveryCursor       string
-	discoveredCampaigns   map[string]any
-	discoveryGameSlugs    map[string]string
+	catalogHTTPClient     *httpclient.Client
+	catalogEndpoint       string
 }
 
 func NewRefresher(options Options) (*Refresher, error) {
@@ -80,7 +78,7 @@ func NewRefresher(options Options) (*Refresher, error) {
 	if options.AuthState == nil {
 		return nil, fmt.Errorf("inventory 认证状态不能为空")
 	}
-	if options.DiscoveryMode != DiscoveryDashboard && options.DiscoveryMode != DiscoveryChannels {
+	if options.DiscoveryMode != DiscoveryDashboard && options.DiscoveryMode != DiscoveryCatalog {
 		return nil, fmt.Errorf("未知活动发现模式: %s", options.DiscoveryMode)
 	}
 
@@ -99,6 +97,14 @@ func NewRefresher(options Options) (*Refresher, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
+	if options.DiscoveryMode == DiscoveryCatalog && options.CatalogHTTPClient == nil {
+		return nil, fmt.Errorf("公共活动目录 HTTP 客户端不能为空")
+	}
+	catalogEndpoint := options.CatalogEndpoint
+	if catalogEndpoint == "" {
+		catalogEndpoint = defaultCatalogEndpoint
+	}
+
 	completedRewardIDs := rewards.CompletedCampaignIDs(options.RewardProgress)
 	rewardProgressMinutes := rewardMinutesByCampaignID(options.RewardProgress)
 
@@ -111,6 +117,8 @@ func NewRefresher(options Options) (*Refresher, error) {
 		now:                   now,
 		chunkSize:             chunkSize,
 		discoveryMode:         options.DiscoveryMode,
+		catalogHTTPClient:     options.CatalogHTTPClient,
+		catalogEndpoint:       catalogEndpoint,
 	}, nil
 }
 
@@ -186,15 +194,23 @@ func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapsh
 	if authSnapshot.UserID == 0 {
 		return Snapshot{}, fmt.Errorf("认证状态缺少 user_id")
 	}
-	now := r.now().UTC()
+	var discovered map[string]any
+	if r.discoveryMode == DiscoveryCatalog {
+		var err error
+		discovered, err = r.fetchCatalogCampaigns(ctx)
+		if err != nil {
+			return Snapshot{}, err
+		}
+	}
 
+	// 目录只提供公开信息，随后取库存补入当前账号的进度和关联状态
 	inventoryPayload, claimedBenefits, err := r.fetchInventoryPayload(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	var mergedPayload map[string]any
-	if r.discoveryMode == DiscoveryChannels {
-		mergedPayload, err = r.fetchChannelCampaigns(ctx, inventoryPayload, options)
+	if r.discoveryMode == DiscoveryCatalog {
+		mergedPayload, err = mergeCampaignPayloads(inventoryPayload, discovered)
 	} else {
 		var availableCampaigns []campaignEnvelope
 		availableCampaigns, err = r.fetchAvailableCampaigns(ctx)
@@ -206,6 +222,8 @@ func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapsh
 		return Snapshot{}, err
 	}
 
+	r.filterCatalogCampaigns(mergedPayload)
+	now := r.now().UTC()
 	rewardPayload, err := r.fetchRewardCampaigns(ctx, now)
 	if err != nil {
 		return Snapshot{}, err
