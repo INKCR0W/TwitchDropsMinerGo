@@ -74,7 +74,7 @@ func New(options Options) (*State, error) {
 
 	clientInfo := options.ClientInfo
 	if clientInfo == (httpclient.ClientInfo{}) {
-		clientInfo = httpclient.TVAppClient
+		clientInfo = httpclient.AndroidAppClient
 	}
 	if strings.TrimSpace(clientInfo.ClientURL) == "" {
 		return nil, fmt.Errorf("认证客户端 URL 不能为空")
@@ -168,6 +168,12 @@ func (s *State) Validate(ctx context.Context) error {
 		s.now().UTC().Before(s.lastValidatedAt.Add(s.revalidateInterval))
 	s.mu.Unlock()
 
+	if s.clientInfo.ClientID == httpclient.AndroidAppClient.ClientID && !alreadyAuthenticated {
+		if err := s.ensureAuthenticated(ctx); err != nil {
+			return err
+		}
+		alreadyAuthenticated = true
+	}
 	if !hasDevice {
 		if err := s.ensureDeviceID(ctx); err != nil {
 			return err

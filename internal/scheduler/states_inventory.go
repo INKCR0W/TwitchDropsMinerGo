@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/inventory"
 )
 
@@ -18,12 +17,8 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	}
 	s.logger.Info("PubSub 已启动，开始校验认证并拉取 inventory")
 
-	settings := s.settingsCopy()
 	snapshot, err := s.refresher.Refresh(ctx, inventory.RefreshOptions{
-		EnableBadgesEmotes: settings.EnableBadgesEmotes,
-		ExcludedGames:      settings.Exclude,
-		PriorityGames:      settings.Priority,
-		PriorityOnly:       settings.PriorityMode == config.PriorityOnly,
+		EnableBadgesEmotes: s.settingsCopy().EnableBadgesEmotes,
 	})
 	if err != nil {
 		return fmt.Errorf("刷新 inventory 失败: %w", err)

@@ -49,10 +49,10 @@ func newTestHTTPClient(t *testing.T) *httpclient.Client {
 func TestClientDefaultsToTVIdentity(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Client-Id") != httpclient.TVAppClient.ClientID {
+		if r.Header.Get("Client-Id") != httpclient.AndroidAppClient.ClientID {
 			t.Error("默认 GQL Client-ID 必须与 TV 设备授权一致")
 		}
-		if r.Header.Get("User-Agent") != httpclient.TVAppClient.UserAgent {
+		if r.Header.Get("User-Agent") != httpclient.AndroidAppClient.UserAgent {
 			t.Error("默认 GQL User-Agent 必须与 TV 设备授权一致")
 		}
 		_, _ = io.WriteString(w, `{"data":{"currentUser":{"id":"42"}}}`)

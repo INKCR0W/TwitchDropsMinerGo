@@ -11,18 +11,10 @@ import (
 	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/domain"
 	"twitchdropsminergo/internal/gql"
-	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/rewards"
 )
 
 const defaultChunkSize = 20
-
-type DiscoveryMode string
-
-const (
-	DiscoveryDashboard DiscoveryMode = ""
-	DiscoveryCatalog   DiscoveryMode = "catalog"
-)
 
 type GQLClient interface {
 	Do(context.Context, gql.Operation) (gql.Response, error)
@@ -35,22 +27,16 @@ type AuthState interface {
 }
 
 type Options struct {
-	GQLClient         GQLClient
-	AuthState         AuthState
-	RewardProgress    map[string]rewards.Progress
-	Clock             func() time.Time
-	ChunkSize         int
-	Logger            *slog.Logger
-	DiscoveryMode     DiscoveryMode
-	CatalogHTTPClient *httpclient.Client
-	CatalogEndpoint   string
+	GQLClient      GQLClient
+	AuthState      AuthState
+	RewardProgress map[string]rewards.Progress
+	Clock          func() time.Time
+	ChunkSize      int
+	Logger         *slog.Logger
 }
 
 type RefreshOptions struct {
 	EnableBadgesEmotes bool
-	ExcludedGames      []string
-	PriorityGames      []string
-	PriorityOnly       bool
 }
 
 type Snapshot struct {
@@ -69,9 +55,6 @@ type Refresher struct {
 	rewardProgressMinutes map[string]int
 	now                   func() time.Time
 	chunkSize             int
-	discoveryMode         DiscoveryMode
-	catalogHTTPClient     *httpclient.Client
-	catalogEndpoint       string
 }
 
 func NewRefresher(options Options) (*Refresher, error) {
@@ -80,9 +63,6 @@ func NewRefresher(options Options) (*Refresher, error) {
 	}
 	if options.AuthState == nil {
 		return nil, fmt.Errorf("inventory 认证状态不能为空")
-	}
-	if options.DiscoveryMode != DiscoveryDashboard && options.DiscoveryMode != DiscoveryCatalog {
-		return nil, fmt.Errorf("未知活动发现模式: %s", options.DiscoveryMode)
 	}
 
 	now := options.Clock
@@ -100,14 +80,6 @@ func NewRefresher(options Options) (*Refresher, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
-	if options.DiscoveryMode == DiscoveryCatalog && options.CatalogHTTPClient == nil {
-		return nil, fmt.Errorf("公共活动目录 HTTP 客户端不能为空")
-	}
-	catalogEndpoint := options.CatalogEndpoint
-	if catalogEndpoint == "" {
-		catalogEndpoint = defaultCatalogEndpoint
-	}
-
 	completedRewardIDs := rewards.CompletedCampaignIDs(options.RewardProgress)
 	rewardProgressMinutes := rewardMinutesByCampaignID(options.RewardProgress)
 
@@ -119,9 +91,6 @@ func NewRefresher(options Options) (*Refresher, error) {
 		rewardProgressMinutes: rewardProgressMinutes,
 		now:                   now,
 		chunkSize:             chunkSize,
-		discoveryMode:         options.DiscoveryMode,
-		catalogHTTPClient:     options.CatalogHTTPClient,
-		catalogEndpoint:       catalogEndpoint,
 	}, nil
 }
 
@@ -197,41 +166,23 @@ func (r *Refresher) Refresh(ctx context.Context, options RefreshOptions) (Snapsh
 	if authSnapshot.UserID == 0 {
 		return Snapshot{}, fmt.Errorf("认证状态缺少 user_id")
 	}
-	var discovered map[string]any
-	if r.discoveryMode == DiscoveryCatalog {
-		var err error
-		discovered, err = r.fetchCatalogCampaigns(ctx)
-		if err != nil {
-			return Snapshot{}, err
-		}
-	}
+	now := r.now().UTC()
 
-	// 目录只提供公开信息，随后取库存补入当前账号的进度和关联状态
 	inventoryPayload, claimedBenefits, err := r.fetchInventoryPayload(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	var mergedPayload map[string]any
-	if r.discoveryMode == DiscoveryCatalog {
-		mergedPayload, err = mergeCampaignPayloads(inventoryPayload, discovered)
-	} else {
-		var availableCampaigns []campaignEnvelope
-		availableCampaigns, err = r.fetchAvailableCampaigns(ctx)
-		if err == nil {
-			mergedPayload, err = r.fetchCampaignDetails(ctx, authSnapshot.UserID, inventoryPayload, availableCampaigns)
-		}
-	}
+
+	availableCampaigns, err := r.fetchAvailableCampaigns(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
 
-	if r.discoveryMode == DiscoveryCatalog {
-		if err := r.resolveCatalogAccounts(ctx, mergedPayload, options); err != nil {
-			return Snapshot{}, err
-		}
+	mergedPayload, err := r.fetchCampaignDetails(ctx, authSnapshot.UserID, inventoryPayload, availableCampaigns)
+	if err != nil {
+		return Snapshot{}, err
 	}
-	r.filterCatalogCampaigns(mergedPayload)
-	now := r.now().UTC()
+
 	rewardPayload, err := r.fetchRewardCampaigns(ctx, now)
 	if err != nil {
 		return Snapshot{}, err

@@ -75,7 +75,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 
 	clientInfo := options.ClientInfo
 	if clientInfo == (httpclient.ClientInfo{}) {
-		clientInfo = httpclient.TVAppClient
+		clientInfo = httpclient.AndroidAppClient
 	}
 
 	headersProvider := options.HeadersProvider

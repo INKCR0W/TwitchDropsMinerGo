@@ -185,6 +185,11 @@ jobs:
           CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
             go build -trimpath -o "${package_dir}/${{ matrix.binary_name }}" ./cmd/miner-server
 
+          login_binary="${{ matrix.binary_name }}"
+          login_binary="${login_binary/miner-server/miner-login}"
+          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+            go build -trimpath -o "${package_dir}/${login_binary}" ./cmd/miner-login
+
       - name: Pack artifact
         id: pack
         shell: bash
@@ -193,16 +198,18 @@ jobs:
 
           archive_name="${{ needs.prepare.outputs.artifact_prefix }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           package_dir="dist/package/${{ matrix.goos }}-${{ matrix.goarch }}"
+          login_binary="${{ matrix.binary_name }}"
+          login_binary="${login_binary/miner-server/miner-login}"
           cp LICENSE README.md "$package_dir/"
 
           if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
             (
               cd "$package_dir"
-              zip -q -9 "../../${archive_name}.zip" "${{ matrix.binary_name }}" LICENSE README.md
+              zip -q -9 "../../${archive_name}.zip" "${{ matrix.binary_name }}" "$login_binary" LICENSE README.md
             )
             archive_path="dist/${archive_name}.zip"
           else
-            tar -C "$package_dir" -czf "dist/${archive_name}.tar.gz" "${{ matrix.binary_name }}" LICENSE README.md
+            tar -C "$package_dir" -czf "dist/${archive_name}.tar.gz" "${{ matrix.binary_name }}" "$login_binary" LICENSE README.md
             archive_path="dist/${archive_name}.tar.gz"
           fi
 

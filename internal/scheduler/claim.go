@@ -62,18 +62,12 @@ func (s *Scheduler) claimDropRequest(ctx context.Context, claimID string) (bool,
 	if err != nil {
 		return false, err
 	}
-	claimData, err := asMap(data["claimDropRewards"], "data.claimDropRewards")
-	if err != nil {
-		return false, fmt.Errorf("ClaimDrop 响应不完整: %w", err)
-	}
-	status := stringValue(claimData, "status")
-	switch status {
+	claimData := optionalMap(data["claimDropRewards"])
+	switch stringValue(claimData, "status") {
 	case "ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED":
 		return true, nil
-	case "":
-		return false, fmt.Errorf("ClaimDrop 响应缺少 status")
 	default:
-		return false, fmt.Errorf("ClaimDrop 未成功: status=%s", status)
+		return false, nil
 	}
 }
 

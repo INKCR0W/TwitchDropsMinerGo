@@ -91,7 +91,7 @@ func New(options Options) (*Client, error) {
 
 	info := options.ClientInfo
 	if info == (ClientInfo{}) {
-		info = TVAppClient
+		info = AndroidAppClient
 	}
 
 	backoff := options.Backoff

@@ -54,7 +54,7 @@ func TestStateValidatePerformsDeviceCodeLoginAndPersistsSession(t *testing.T) {
 	}
 }
 
-func TestDefaultTVLoginMigratesAndroidTokenAndRestoresTVSession(t *testing.T) {
+func TestExplicitTVLoginMigratesAndroidTokenAndRestoresTVSession(t *testing.T) {
 	t.Parallel()
 	var deviceHits, tokenHits, validateHits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +108,7 @@ func TestDefaultTVLoginMigratesAndroidTokenAndRestoresTVSession(t *testing.T) {
 	announced := 0
 	options := Options{
 		HTTPClient: client, DeviceEndpoint: server.URL + "/device",
+		ClientInfo:    httpclient.TVAppClient,
 		TokenEndpoint: server.URL + "/token", ValidateEndpoint: server.URL + "/validate",
 		Sleep:             func(context.Context, time.Duration) error { return nil },
 		DeviceCodeHandler: func(context.Context, DeviceCode) error { announced++; return nil },

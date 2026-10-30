@@ -33,8 +33,9 @@ func main() {
 }
 
 type cliOptions struct {
-	RuntimeDir  string
-	Healthcheck bool
+	RuntimeDir    string
+	Healthcheck   bool
+	ImportSession string
 }
 
 func run(args []string) int {
@@ -92,6 +93,9 @@ func run(args []string) int {
 			fmt.Fprintf(os.Stderr, "关闭日志文件失败: %v\n", closeErr)
 		}
 	}()
+	if options.ImportSession != "" {
+		return runSessionImport(layout, settings, logger, options.ImportSession, os.Stdin, os.Stdout)
+	}
 
 	switch outcome, err := config.EnsureFile(layout.SettingsFile, settings); {
 	case err != nil:
@@ -117,7 +121,7 @@ func run(args []string) int {
 
 	mainlandDialer := newMainlandDialer(application.Settings(), logger)
 
-	clientInfo := httpclient.TVAppClient
+	clientInfo := httpclient.AndroidAppClient
 	httpClient, err := httpclient.New(httpclient.Options{
 		Logger:         logger,
 		Settings:       application.Settings(),
@@ -167,27 +171,11 @@ func run(args []string) int {
 		return failRun(application, logger, "初始化观看进度存储失败", err)
 	}
 
-	catalogClient, err := httpclient.New(httpclient.Options{
-		Logger: logger, Settings: application.Settings(),
-		ClientInfo:     httpclient.ClientInfo{UserAgent: "TwitchDropsMinerGo"},
-		DialTLSContext: mainlandDialerTLS(mainlandDialer),
-	})
-	if err != nil {
-		return failRun(application, logger, "初始化公共目录 HTTP 客户端失败", err)
-	}
-	defer func() {
-		if closeErr := catalogClient.Close(); closeErr != nil {
-			logger.Warn("关闭公共目录 HTTP 客户端失败", "error", closeErr)
-		}
-	}()
-
 	refresher, err := inventory.NewRefresher(inventory.Options{
-		CatalogHTTPClient: catalogClient,
-		DiscoveryMode:     inventory.DiscoveryCatalog,
-		GQLClient:         gqlClient,
-		AuthState:         authState,
-		RewardProgress:    rewardProgress.Snapshot(),
-		Logger:            logger,
+		GQLClient:      gqlClient,
+		AuthState:      authState,
+		RewardProgress: rewardProgress.Snapshot(),
+		Logger:         logger,
 	})
 	if err != nil {
 		return failRun(application, logger, "初始化 inventory 刷新器失败", err)
@@ -263,6 +251,7 @@ func parseArgs(args []string) (cliOptions, error) {
 	flagSet.SetOutput(io.Discard)
 	flagSet.StringVar(&options.RuntimeDir, "runtime-dir", runtime.DefaultRootDir, "运行目录")
 	flagSet.BoolVar(&options.Healthcheck, "healthcheck", false, "健康检查模式")
+	flagSet.StringVar(&options.ImportSession, "import-session", "", "导入 Android 浏览器会话后退出，- 表示标准输入")
 
 	if err := flagSet.Parse(args); err != nil {
 		return cliOptions{}, err
@@ -270,6 +259,9 @@ func parseArgs(args []string) (cliOptions, error) {
 
 	if flagSet.NArg() > 0 {
 		return cliOptions{}, fmt.Errorf("不支持的位置参数: %s", strings.Join(flagSet.Args(), " "))
+	}
+	if options.Healthcheck && options.ImportSession != "" {
+		return cliOptions{}, fmt.Errorf("healthcheck 与 import-session 不能同时使用")
 	}
 
 	return options, nil

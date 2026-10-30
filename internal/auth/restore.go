@@ -38,6 +38,9 @@ func (s *State) ensureDeviceID(ctx context.Context) error {
 }
 
 func (s *State) ensureAuthenticated(ctx context.Context) error {
+	if s.clientInfo.ClientID == httpclient.AndroidAppClient.ClientID {
+		return s.ensureBrowserAuthenticated(ctx)
+	}
 	var validated validateResponse
 
 	for clientMismatchAttempt := 0; clientMismatchAttempt < 2; clientMismatchAttempt++ {
@@ -99,8 +102,8 @@ func (s *State) ensureAuthenticated(ctx context.Context) error {
 	}
 
 	userID, err := strconv.ParseInt(validated.UserID, 10, 64)
-	if err != nil {
-		return fmt.Errorf("解析 user_id 失败: %w", err)
+	if err != nil || userID <= 0 {
+		return fmt.Errorf("验证 access token 失败: user_id 无效")
 	}
 
 	accessToken := s.currentAccessToken()
