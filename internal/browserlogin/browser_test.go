@@ -1,14 +1,9 @@
 package browserlogin
 
 import (
-	"context"
-	"github.com/gorilla/websocket"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestLoginURLPreservesAndroidRedirectAndState(t *testing.T) {
@@ -47,72 +42,5 @@ func TestCallbackRequiresTrustedOriginAndState(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), "secret") {
 			t.Fatal("token leaked")
 		}
-	}
-}
-func TestCaptureEnablesEventsBeforeNavigation(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer func() { _ = c.Close() }()
-		var command map[string]any
-		if c.ReadJSON(&command) != nil {
-			return
-		}
-		if command["method"] != "Page.enable" {
-			t.Error("events not enabled first")
-		}
-		if err := c.WriteJSON(map[string]any{"id": 1, "result": map[string]any{}}); err != nil {
-			t.Error(err)
-			return
-		}
-		if c.ReadJSON(&command) != nil {
-			return
-		}
-		if command["method"] != "Page.navigate" {
-			t.Error("navigation missing")
-		}
-		if err := c.WriteJSON(map[string]any{"method": "Page.frameNavigated", "params": map[string]any{"frame": map[string]any{"url": "https://www.twitch.tv/#access_token=secret&token_type=bearer&state=valid"}}}); err != nil {
-			t.Error(err)
-			return
-		}
-		if err := c.ReadJSON(&command); err != nil {
-			t.Error(err)
-			return
-		}
-		if command["method"] != "Browser.close" {
-			t.Error("browser close missing")
-		}
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	token, err := capture(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), "https://www.twitch.tv/login", "valid")
-	if err != nil || token != "secret" {
-		t.Fatal("capture failed", err)
-	}
-}
-func TestCaptureStopsOnCancellation(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer func() { _ = c.Close() }()
-		for {
-			if _, _, err = c.ReadMessage(); err != nil {
-				return
-			}
-		}
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	_, err := capture(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), "https://www.twitch.tv/login", "valid")
-	if err != context.DeadlineExceeded {
-		t.Fatal("cancellation not preserved", err)
 	}
 }

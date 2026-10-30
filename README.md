@@ -4,24 +4,23 @@ Twitch Drops 自动挂机服务，支持活动筛选、自动切台和领取，�
 
 ## 快速开始
 
-下载并解压[发布包](https://github.com/INKCR0W/TwitchDropsMinerGo/releases)。本机授权需要 Chrome 或 Edge，服务器不需要浏览器。从源码运行需 Go 1.26 或更高版本。
+下载并解压[发布包](https://github.com/INKCR0W/TwitchDropsMinerGo/releases)。授权使用自己平时的浏览器，服务器不需要浏览器。从源码运行需 Go 1.26 或更高版本。
 
 ```sh
-./miner-login
 ./miner-server
 ```
 
-Windows 使用对应的 `.exe`；从源码运行可替换为 `go run ./cmd/miner-login` 和 `go run ./cmd/miner-server`。
+Windows 使用 `miner-server.exe`；从源码运行可替换为 `go run ./cmd/miner-server`。
 
-登录工具在浏览器中完成授权，默认导出到当前目录下的 `runtime/state/android-session.json`，不再额外联网校验。服务端优先使用 `runtime/state/cookies.json`，只有登录缺失或失效时才校验并导入 Android 会话；成功后保存 cookie 并删除已导入文件，失败则保留原文件和 cookie。
+首次在终端运行时，服务会给出登录链接。在日常浏览器打开链接，完成 Twitch 登录和二步验证后，将地址栏的完整地址粘贴回终端并回车。粘贴内容不会回显，请勿公开完成后的地址。
 
-两工具均支持 `-runtime-dir <目录>`。登录工具还支持 `-output <文件>`、`-browser <浏览器路径>` 和 `-proxy <浏览器代理 URL>`。需要切换账号或使用自定义导出文件时，先停止服务，再执行：
+授权结果由服务校验并保存到 `runtime/state/cookies.json`，之后直接复用。需要重新登录或切换账号时，先停止服务，再执行：
 
 ```sh
-./miner-server -import-session <会话文件路径>
+./miner-server -login
 ```
 
-不要把导出文件改名为 `cookies.json`，两者格式不同。会话和 cookie 都含登录凭据，不要公开或提交到仓库。
+可用 `-runtime-dir <目录>` 指定运行目录。旧版 `android-session.json` 仍可用 `-import-session <文件路径>` 导入；默认路径下的旧会话文件仅在 cookie 缺失或失效时自动导入。会话与 cookie 格式不同，不要互相改名，也不要公开。
 
 ## Docker 部署
 
@@ -39,17 +38,16 @@ git clone https://github.com/INKCR0W/TwitchDropsMinerGo.git
 cd TwitchDropsMinerGo
 ```
 
-在自己的电脑上运行 `miner-login`，然后在服务器的 compose 目录执行：
+在服务器的 compose 目录执行登录，链接可在自己的电脑或手机浏览器中打开：
 
 ```sh
-mkdir -p runtime/state
 docker compose stop miner
-# 将导出的 android-session.json 上传到 runtime/state/android-session.json
+docker compose run --rm -it miner -login
 docker compose up -d
 docker compose logs -f miner
 ```
 
-`./runtime` 挂载到容器内的 `/data`，默认会话会按上述顺序自动导入，无需改名或额外执行导入命令。已有有效 cookie 时不读取 Android 文件；主动换账号可使用 `docker compose run --rm -T --no-deps miner -import-session /data/state/android-session.json`。
+`./runtime` 挂载到容器内的 `/data`，登录结果会保存到宿主机，后台启动时直接使用。
 
 镜像：[`inkcrow/twitchdropsminergo`](https://hub.docker.com/r/inkcrow/twitchdropsminergo)。下载的 compose 默认使用正式版 `latest`；需要 main 最新构建时改用 `edge`。更新镜像用 `docker compose pull && docker compose up -d`；源码部署则 `git pull` 后执行 `docker compose up -d`。
 

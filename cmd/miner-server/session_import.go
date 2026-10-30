@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -46,13 +47,9 @@ func runSessionImport(layout runtime.Layout, settings config.Settings, logger *s
 		logger.Error("读取会话失败", "error", err)
 		return 1
 	}
-	dialer := newMainlandDialer(settings, logger)
-	client, err := httpclient.New(httpclient.Options{
-		Settings: settings, CookiesPath: layout.CookiesFile,
-		ClientInfo: httpclient.AndroidAppClient, DialTLSContext: mainlandDialerTLS(dialer),
-	})
+	state, client, err := newSessionAuthState(layout, settings, logger)
 	if err != nil {
-		logger.Error("初始化会话导入客户端失败", "error", err)
+		logger.Error("初始化会话导入认证失败", "error", err)
 		return 1
 	}
 	defer func() {
@@ -60,11 +57,6 @@ func runSessionImport(layout runtime.Layout, settings config.Settings, logger *s
 			logger.Warn("关闭会话导入客户端失败", "error", err)
 		}
 	}()
-	state, err := auth.New(auth.Options{HTTPClient: client, ClientInfo: httpclient.AndroidAppClient})
-	if err != nil {
-		logger.Error("初始化会话导入认证失败", "error", err)
-		return 1
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	if err := state.ImportSession(ctx, session); err != nil {
@@ -76,4 +68,20 @@ func runSessionImport(layout runtime.Layout, settings config.Settings, logger *s
 		return 1
 	}
 	return 0
+}
+
+func newSessionAuthState(layout runtime.Layout, settings config.Settings, logger *slog.Logger) (*auth.State, *httpclient.Client, error) {
+	dialer := newMainlandDialer(settings, logger)
+	client, err := httpclient.New(httpclient.Options{
+		Logger: logger, Settings: settings, CookiesPath: layout.CookiesFile,
+		ClientInfo: httpclient.AndroidAppClient, DialTLSContext: mainlandDialerTLS(dialer),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	state, err := auth.New(auth.Options{HTTPClient: client, ClientInfo: httpclient.AndroidAppClient})
+	if err != nil {
+		return nil, nil, errors.Join(err, client.Close())
+	}
+	return state, client, nil
 }

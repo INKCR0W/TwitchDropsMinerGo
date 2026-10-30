@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/term"
+
 	"twitchdropsminergo/internal/app"
 	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/config"
@@ -35,6 +37,7 @@ func main() {
 type cliOptions struct {
 	RuntimeDir    string
 	Healthcheck   bool
+	Login         bool
 	ImportSession string
 }
 
@@ -93,6 +96,11 @@ func run(args []string) int {
 			fmt.Fprintf(os.Stderr, "关闭日志文件失败: %v\n", closeErr)
 		}
 	}()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if options.Login {
+		return runBrowserLogin(ctx, layout, settings, logger, os.Stdin, os.Stdout)
+	}
 	if options.ImportSession != "" {
 		return runSessionImport(layout, settings, logger, options.ImportSession, os.Stdin, os.Stdout)
 	}
@@ -148,6 +156,11 @@ func run(args []string) int {
 		return failRun(application, logger, "初始化认证状态失败", err)
 	}
 	authState := &portableAuthState{State: baseAuthState, sessionFile: layout.SessionFile, logger: logger}
+	if err := ensureStartupLogin(ctx, term.IsTerminal(int(os.Stdin.Fd())), authState.Validate, func(ctx context.Context) error {
+		return interactiveLogin(ctx, os.Stdin, os.Stdout, baseAuthState)
+	}, logger); err != nil {
+		return failRun(application, logger, "启动前登录失败", err)
+	}
 
 	gqlClient, err := gql.NewClient(gql.ClientOptions{
 		HTTPClient: httpClient,
@@ -231,9 +244,6 @@ func run(args []string) int {
 		"state_observer", "enabled",
 	)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	if err := runService(ctx, stop,
 		namedRunner{name: "应用状态持久化", runner: application},
 		namedRunner{name: "调度服务", runner: schedulerInstance},
@@ -251,6 +261,7 @@ func parseArgs(args []string) (cliOptions, error) {
 	flagSet := flag.NewFlagSet("miner-server", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	flagSet.StringVar(&options.RuntimeDir, "runtime-dir", runtime.DefaultRootDir, "运行目录")
+	flagSet.BoolVar(&options.Login, "login", false, "在浏览器完成登录并保存 Cookie 后退出")
 	flagSet.BoolVar(&options.Healthcheck, "healthcheck", false, "健康检查模式")
 	flagSet.StringVar(&options.ImportSession, "import-session", "", "导入 Android 浏览器会话后退出，- 表示标准输入")
 
@@ -261,8 +272,8 @@ func parseArgs(args []string) (cliOptions, error) {
 	if flagSet.NArg() > 0 {
 		return cliOptions{}, fmt.Errorf("不支持的位置参数: %s", strings.Join(flagSet.Args(), " "))
 	}
-	if options.Healthcheck && options.ImportSession != "" {
-		return cliOptions{}, fmt.Errorf("healthcheck 与 import-session 不能同时使用")
+	if options.Healthcheck && (options.ImportSession != "" || options.Login) || options.Login && options.ImportSession != "" {
+		return cliOptions{}, fmt.Errorf("healthcheck、login 与 import-session 不能同时使用")
 	}
 
 	return options, nil
