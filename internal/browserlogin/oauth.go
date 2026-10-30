@@ -36,7 +36,7 @@ func callbackToken(raw, state string) (string, error) {
 		if len(query["state"]) != 1 || query.Get("state") != state {
 			return "", errors.New("授权校验码不匹配，请重新登录")
 		}
-		return "", errors.New("Twitch 未批准本次授权")
+		return "", errors.New("本次 Twitch 授权未获批准")
 	}
 	values, err := url.ParseQuery(u.Fragment)
 	if err != nil {
@@ -49,7 +49,7 @@ func callbackToken(raw, state string) (string, error) {
 		return "", errors.New("授权校验码不匹配，请重新登录")
 	}
 	if values.Get("error") != "" {
-		return "", errors.New("Twitch 未批准本次授权")
+		return "", errors.New("本次 Twitch 授权未获批准")
 	}
 	token := values.Get("access_token")
 	if len(values["access_token"]) != 1 || token == "" || strings.ContainsAny(token, " \r\n\t") || !strings.EqualFold(values.Get("token_type"), "bearer") {

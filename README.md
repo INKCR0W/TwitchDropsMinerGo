@@ -4,15 +4,32 @@ Twitch Drops 自动挂机工具的 Go 服务端实现，面向无头 24/7 部署
 
 ## 环境要求
 
-Go 1.26 或更高版本（以 `go.mod` 的 `go 1.26.0` 为准）。
+从源码运行或构建需要 Go 1.26 或更高版本（以 `go.mod` 为准），使用发布包或 Docker 镜像不需要安装 Go。
+
+首次授权需要在有图形界面的电脑上安装 Chrome 或 Edge。浏览器只在登录时使用，服务器和 Docker 容器不需要安装浏览器。
 
 ## 使用方法
 
-```
-miner-server --runtime-dir /path/to/runtime
+下载适合本机系统的[发布包](https://github.com/INKCR0W/TwitchDropsMinerGo/releases)，解压后包含 `miner-login` 和 `miner-server`。先运行登录工具，在打开的独立浏览器窗口中完成 Twitch 登录和二步验证：
+
+```sh
+./miner-login
 ```
 
-首次运行会提示通过 Twitch Device Code 授权。后续运行从持久化 cookie 文件恢复会话。
+Windows 使用 `.\miner-login.exe`。从源码运行可使用 `go run ./cmd/miner-login`。
+
+授权成功后，会话默认保存到**执行命令时所在目录**下的 `runtime/state/android-session.json`。可用 `-output <路径>` 更改保存位置，用 `-browser <路径>` 指定浏览器；需要代理时使用 `-proxy <代理 URL>`。
+
+本机运行服务时，先导入会话，再启动服务：
+
+```sh
+./miner-server -runtime-dir ./runtime -import-session ./runtime/state/android-session.json
+./miner-server -runtime-dir ./runtime
+```
+
+Windows 使用 `.\miner-server.exe`；从源码运行可将 `./miner-server` 替换为 `go run ./cmd/miner-server`。Docker 部署的导入命令见下方。
+
+服务使用 Android 客户端会话，不再通过设备码登录。之前的 TV 会话需要重新授权。导入会话前应停止正在使用同一运行目录的实例；程序会先校验令牌所属客户端和账号，成功后才覆盖原来的认证信息。后续启动从持久化 cookie 恢复会话；会话过期或被撤销后，重新授权并导入即可。
 
 运行目录下的文件：
 
@@ -21,10 +38,10 @@ miner-server --runtime-dir /path/to/runtime
 | `settings.json` | 配置文件 |
 | `state/state.json` | 运行时状态快照 |
 | `state/cookies.json` | 持久化认证 cookie |
+| `state/android-session.json` | 登录工具默认导出的会话，供本机或服务器导入 |
 | `logs/miner-server.log` | 日志输出 |
-| `pending_login.txt` | 待登录授权提示，登录成功后自动删除 |
 
-日志文件可能包含短期有效的 Device Code 授权提示和运行错误信息。建议将运行目录放在仅当前用户可读写的位置；服务端默认会限制日志文件权限并按大小轮转。
+会话文件和 cookie 都包含登录凭据，不要公开或提交到仓库。建议将运行目录放在仅当前用户可读写的位置；服务端默认会限制日志文件权限并按大小轮转。
 
 ## Docker 部署
 
@@ -33,7 +50,6 @@ miner-server --runtime-dir /path/to/runtime
 ```
 mkdir tdm && cd tdm
 curl -fLO https://raw.githubusercontent.com/INKCR0W/TwitchDropsMinerGo/main/deploy/compose.yaml
-docker compose up -d && docker compose logs -f miner
 ```
 
 镜像由 CI 构建并推送至 [Docker Hub](https://hub.docker.com/r/inkcrow/twitchdropsminergo)：`latest` 为最新正式版，`edge` 跟随 main，支持 amd64/arm64。更新：`docker compose pull && docker compose up -d`。
@@ -44,12 +60,28 @@ docker compose up -d && docker compose logs -f miner
 
 ```
 git clone https://github.com/INKCR0W/TwitchDropsMinerGo.git && cd TwitchDropsMinerGo
-docker compose up -d && docker compose logs -f miner
 ```
 
-每次 `up` 都会基于当前源码带缓存重建镜像，`git pull` 后重跑上面第二条命令即可生效。
+每次 `up` 都会基于当前源码带缓存重建镜像，`git pull` 后重新执行 `docker compose up -d` 即可更新。
 
-两条路线通用：首次运行时日志中会出现登录提示（同时写入 `./runtime/pending_login.txt`），在任意设备的浏览器打开提示中的网址并输入代码即可。`pending_login.txt` 消失即登录成功，Ctrl+C 断开日志查看，容器继续运行。
+### 登录与会话导入
+
+两条部署路线都使用前面介绍的 `miner-login` 在本机授权。服务器没有桌面也可以使用：在自己的电脑完成登录，把生成的 `android-session.json` 通过 SSH/SCP 等方式上传到服务器项目目录下的 `runtime/state/android-session.json`。
+
+在服务器的 compose 文件所在目录执行：
+
+```sh
+mkdir -p runtime/state
+# 将本机生成的会话文件上传到 runtime/state/android-session.json 后执行
+docker compose stop miner
+docker compose run --rm -T --no-deps miner -import-session /data/state/android-session.json
+docker compose up -d
+docker compose logs -f miner
+```
+
+`./runtime` 在容器内挂载为 `/data`，因此导入命令使用 `/data/state/android-session.json`。确认输出“Android 会话已导入”后再启动服务；如果导入失败，先检查文件、网络或重新授权。导入成功后可删除上传的会话文件，后续运行使用 `state/cookies.json`。
+
+镜像只包含服务端，`miner-login` 需要在有浏览器的电脑上运行。Ctrl+C 只会退出日志查看，容器继续运行。
 
 镜像内置健康检查：等待登录授权或调度持续出错时，`docker ps` 会显示 unhealthy（Docker 不会因此自动重启容器，仅作状态可见）。
 

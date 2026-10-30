@@ -181,7 +181,7 @@ func capture(ctx context.Context, endpoint, address, state string) (token string
 	go func() {
 		select {
 		case <-ctx.Done():
-			connection.Close()
+			_ = connection.Close()
 		case <-done:
 		}
 	}()

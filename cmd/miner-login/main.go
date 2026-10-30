@@ -38,44 +38,57 @@ func parseArgs(args []string) (options, error) {
 	return o, nil
 }
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
-func run(args []string, output, stderr io.Writer) int {
+func run(args []string, output, stderr io.Writer) (code int) {
 	o, err := parseArgs(args)
 	if err != nil {
-		fmt.Fprintln(stderr, "参数无效，请检查 -output、-browser、-proxy 和 -timeout")
+		_, _ = fmt.Fprintln(stderr, "参数无效，请检查 -output、-browser、-proxy 和 -timeout")
 		return 2
 	}
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithTimeout(parent, o.Timeout)
 	defer cancel()
-	fmt.Fprintln(output, "请在打开的浏览器中完成 Twitch 登录和二步验证")
+	if _, err := fmt.Fprintln(output, "请在打开的浏览器中完成 Twitch 登录和二步验证"); err != nil {
+		_, _ = fmt.Fprintln(stderr, "输出登录提示失败")
+		return 1
+	}
 	token, err := browserlogin.Login(ctx, browserlogin.Options{BrowserPath: o.Browser, Proxy: o.Proxy})
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
 	settings := config.DefaultSettings()
 	settings.Proxy = o.Proxy
 	client, err := httpclient.New(httpclient.Options{Settings: settings, ClientInfo: httpclient.AndroidAppClient})
 	if err != nil {
-		fmt.Fprintln(stderr, "初始化授权校验失败")
+		_, _ = fmt.Fprintln(stderr, "初始化授权校验失败")
 		return 1
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			_, _ = fmt.Fprintln(stderr, "关闭授权校验客户端失败")
+			if code == 0 {
+				code = 1
+			}
+		}
+	}()
 	state, err := auth.New(auth.Options{HTTPClient: client, ClientInfo: httpclient.AndroidAppClient})
 	if err != nil {
-		fmt.Fprintln(stderr, "初始化认证失败")
+		_, _ = fmt.Fprintln(stderr, "初始化认证失败")
 		return 1
 	}
 	session := auth.Session{Version: 1, ClientID: httpclient.AndroidAppClient.ClientID, AccessToken: token}
 	if err = state.ImportSession(ctx, session); err != nil {
-		fmt.Fprintln(stderr, "Android 授权校验失败，请重新登录")
+		_, _ = fmt.Fprintln(stderr, "Android 授权校验失败，请重新登录")
 		return 1
 	}
 	if err = auth.WriteSession(o.Output, session); err != nil {
-		fmt.Fprintln(stderr, "保存授权会话失败")
+		_, _ = fmt.Fprintln(stderr, "保存授权会话失败")
 		return 1
 	}
-	fmt.Fprintf(output, "Android 授权成功，user_id=%d，会话已保存至 %s\n", state.Snapshot().UserID, o.Output)
+	if _, err := fmt.Fprintf(output, "Android 授权成功，user_id=%d，会话已保存至 %s\n", state.Snapshot().UserID, o.Output); err != nil {
+		_, _ = fmt.Fprintln(stderr, "输出授权结果失败")
+		return 1
+	}
 	return 0
 }

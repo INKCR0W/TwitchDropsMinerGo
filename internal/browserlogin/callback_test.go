@@ -17,19 +17,35 @@ func TestCaptureSameDocumentRedirect(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		var command map[string]any
 		if c.ReadJSON(&command) != nil {
 			return
 		}
-		c.WriteJSON(map[string]any{"id": 1, "result": map[string]any{}})
+		if err := c.WriteJSON(map[string]any{"id": 1, "result": map[string]any{}}); err != nil {
+			t.Error(err)
+			return
+		}
 		if c.ReadJSON(&command) != nil {
 			return
 		}
-		c.WriteJSON(map[string]any{"method": "Page.frameNavigated", "params": map[string]any{"frame": map[string]any{"id": "main", "url": "https://www.twitch.tv/login"}}})
-		c.WriteJSON(map[string]any{"method": "Page.navigatedWithinDocument", "params": map[string]any{"frameId": "iframe", "url": "https://www.twitch.tv/#access_token=wrong&token_type=bearer&state=valid"}})
-		c.WriteJSON(map[string]any{"method": "Page.navigatedWithinDocument", "params": map[string]any{"frameId": "main", "url": "https://www.twitch.tv/#access_token=secret&token_type=bearer&state=valid"}})
-		c.ReadJSON(&command)
+		for _, event := range []map[string]any{
+			{"method": "Page.frameNavigated", "params": map[string]any{"frame": map[string]any{"id": "main", "url": "https://www.twitch.tv/login"}}},
+			{"method": "Page.navigatedWithinDocument", "params": map[string]any{"frameId": "iframe", "url": "https://www.twitch.tv/#access_token=wrong&token_type=bearer&state=valid"}},
+			{"method": "Page.navigatedWithinDocument", "params": map[string]any{"frameId": "main", "url": "https://www.twitch.tv/#access_token=secret&token_type=bearer&state=valid"}},
+		} {
+			if err := c.WriteJSON(event); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+		if err := c.ReadJSON(&command); err != nil {
+			t.Error(err)
+			return
+		}
+		if command["method"] != "Browser.close" {
+			t.Error("browser close missing")
+		}
 	}))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
