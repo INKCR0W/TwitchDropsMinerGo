@@ -12,7 +12,6 @@ import (
 
 	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/browserlogin"
-	"twitchdropsminergo/internal/config"
 	"twitchdropsminergo/internal/httpclient"
 )
 
@@ -38,7 +37,11 @@ func parseArgs(args []string) (options, error) {
 	return o, nil
 }
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
-func run(args []string, output, stderr io.Writer) (code int) {
+func run(args []string, output, stderr io.Writer) int {
+	return runWithLogin(args, output, stderr, browserlogin.Login)
+}
+
+func runWithLogin(args []string, output, stderr io.Writer, login func(context.Context, browserlogin.Options) (string, error)) int {
 	o, err := parseArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "参数无效，请检查 -output、-browser、-proxy 和 -timeout")
@@ -52,41 +55,18 @@ func run(args []string, output, stderr io.Writer) (code int) {
 		_, _ = fmt.Fprintln(stderr, "输出登录提示失败")
 		return 1
 	}
-	token, err := browserlogin.Login(ctx, browserlogin.Options{BrowserPath: o.Browser, Proxy: o.Proxy})
+	token, err := login(ctx, browserlogin.Options{BrowserPath: o.Browser, Proxy: o.Proxy})
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
-	settings := config.DefaultSettings()
-	settings.Proxy = o.Proxy
-	client, err := httpclient.New(httpclient.Options{Settings: settings, ClientInfo: httpclient.AndroidAppClient})
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "初始化授权校验失败")
-		return 1
-	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			_, _ = fmt.Fprintln(stderr, "关闭授权校验客户端失败")
-			if code == 0 {
-				code = 1
-			}
-		}
-	}()
-	state, err := auth.New(auth.Options{HTTPClient: client, ClientInfo: httpclient.AndroidAppClient})
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "初始化认证失败")
-		return 1
-	}
-	session := auth.Session{Version: 1, ClientID: httpclient.AndroidAppClient.ClientID, AccessToken: token}
-	if err = state.ImportSession(ctx, session); err != nil {
-		_, _ = fmt.Fprintln(stderr, "Android 授权校验失败，请重新登录")
-		return 1
-	}
+	// 本机只导出浏览器授权结果，令牌有效性和账号归属由运行服务的环境校验
+	session := auth.Session{Version: auth.SessionVersion, ClientID: httpclient.AndroidAppClient.ClientID, AccessToken: token}
 	if err = auth.WriteSession(o.Output, session); err != nil {
 		_, _ = fmt.Fprintln(stderr, "保存授权会话失败")
 		return 1
 	}
-	if _, err := fmt.Fprintf(output, "Android 授权成功，user_id=%d，会话已保存至 %s\n", state.Snapshot().UserID, o.Output); err != nil {
+	if _, err := fmt.Fprintf(output, "浏览器授权已完成，会话已保存至 %s\n请在运行服务的环境导入并校验\n", o.Output); err != nil {
 		_, _ = fmt.Fprintln(stderr, "输出授权结果失败")
 		return 1
 	}

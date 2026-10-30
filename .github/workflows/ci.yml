@@ -34,7 +34,7 @@ jobs:
           release_kind="prerelease"
           release_tag="pre-release"
           release_title="Pre-release"
-          release_target="main"
+          release_target="${GITHUB_SHA}"
           source_ref="${GITHUB_REF}"
           source_name="${GITHUB_REF_NAME}"
           asset_channel="main"

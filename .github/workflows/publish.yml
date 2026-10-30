@@ -40,6 +40,8 @@ jobs:
 
       - name: Read publish metadata
         id: meta
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -61,6 +63,7 @@ jobs:
           RELEASE_TAG="$(read_meta RELEASE_TAG)"
           RELEASE_TITLE="$(read_meta RELEASE_TITLE)"
           RELEASE_TARGET="$(read_meta RELEASE_TARGET)"
+          SOURCE_SHA="$(read_meta SOURCE_SHA)"
 
           if [[ "${EVENT_NAME:-}" != "push" ]]; then
             echo "拒绝发布非 push 事件产物: EVENT_NAME=${EVENT_NAME:-}" >&2
@@ -70,11 +73,26 @@ jobs:
             echo "拒绝发布 PR 产物: ASSET_CHANNEL=${ASSET_CHANNEL:-}" >&2
             exit 1
           fi
+          if [[ "$SOURCE_SHA" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "发布产物与触发 CI 的提交不匹配" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_KIND" == "prerelease" ]]; then
+            if [[ "$RELEASE_TAG" != "pre-release" || "$ASSET_CHANNEL" != "main" ]]; then
+              echo "拒绝重建非 main 开发预发布" >&2
+              exit 1
+            fi
+            RELEASE_TARGET="$SOURCE_SHA"
+          elif [[ "$RELEASE_KIND" != "release" || "$RELEASE_TAG" != v* ]]; then
+            echo "发布类型或正式版本标签无效" >&2
+            exit 1
+          fi
 
           echo "release_kind=$RELEASE_KIND" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "release_title=$RELEASE_TITLE" >> "$GITHUB_OUTPUT"
           echo "release_target=$RELEASE_TARGET" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Publish artifacts
         env:
@@ -84,6 +102,8 @@ jobs:
           RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
           RELEASE_TARGET: ${{ steps.meta.outputs.release_target }}
           RELEASE_TITLE: ${{ steps.meta.outputs.release_title }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
         shell: bash
         run: |
           set -euo pipefail
@@ -107,33 +127,87 @@ jobs:
             exit 0
           fi
 
-          notes_file="$(mktemp)"
-          cat > "$notes_file" <<'EOF'
-          Rolling preview binaries for main and pull requests.
-
-          Asset naming:
-          - main builds use the `main` channel
-          - pull request builds use the `pr-<number>` channel
-
-          Assets are overwritten in place when the same channel is rebuilt.
-          EOF
-
-          if gh release view "$RELEASE_TAG" -R "$REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" \
-              --title "$RELEASE_TITLE" \
-              --target "$RELEASE_TARGET" \
-              --prerelease \
-              --notes-file "$notes_file" \
-              -R "$REPOSITORY"
-            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber -R "$REPOSITORY"
-          else
-            gh release create "$RELEASE_TAG" "${assets[@]}" \
-              --title "$RELEASE_TITLE" \
-              --target "$RELEASE_TARGET" \
-              --prerelease \
-              --notes-file "$notes_file" \
-              -R "$REPOSITORY"
+          if [[ "$RELEASE_KIND" != "prerelease" || "$RELEASE_TAG" != "pre-release" || "$RELEASE_TARGET" != "$SOURCE_SHA" ]]; then
+            echo "拒绝重建非开发预发布或提交不匹配的产物" >&2
+            exit 1
           fi
+          if [[ "${#assets[@]}" != 6 ]]; then
+            echo "开发预发布必须包含全部 6 个平台归档" >&2
+            exit 1
+          fi
+          for target in windows-amd64.zip windows-arm64.zip linux-amd64.tar.gz linux-arm64.tar.gz darwin-amd64.tar.gz darwin-arm64.tar.gz; do
+            matches=0
+            for asset in "${assets[@]}"; do
+              if [[ "${asset##*/}" == "twitchdropsminergo-main-$target" ]]; then
+                matches=$((matches + 1))
+              fi
+            done
+            if [[ "$matches" != 1 ]]; then
+              echo "开发预发布缺少或重复归档: $target" >&2
+              exit 1
+            fi
+          done
+
+          for asset in "${assets[@]}"; do
+            if [[ ! -s "$asset" || -L "$asset" ]]; then
+              echo "归档产物缺失、为空或是符号链接: $asset" >&2
+              exit 1
+            fi
+            case "$asset" in
+              *.zip) unzip -tq "$asset" >/dev/null ;;
+              *.tar.gz) tar -tzf "$asset" >/dev/null ;;
+            esac
+          done
+
+          notes_file="$(mktemp)"
+          api_error_file="$(mktemp)"
+          trap 'rm -f "$notes_file" "$api_error_file"' EXIT
+          printf 'main 分支开发预发布\n\n提交：%s\n构建：%s\n\n此预发布在每次 main 构建成功后重建，下载地址保持不变。\n' \
+            "$SOURCE_SHA" "$SOURCE_RUN_URL" > "$notes_file"
+
+          resource_exists() {
+            local response
+            if response="$(gh api --include --silent "$1" 2>"$api_error_file")"; then
+              return 0
+            fi
+            if [[ "${response%%$'\n'*}" == *" 404 "* ]]; then
+              return 1
+            fi
+            cat "$api_error_file" >&2
+            return 2
+          }
+
+          release_exists=false
+          if resource_exists "repos/$REPOSITORY/releases/tags/pre-release"; then
+            if [[ "$(gh api "repos/$REPOSITORY/releases/tags/pre-release" --jq .prerelease)" != true ]]; then
+              echo "拒绝删除标记为正式版的 pre-release" >&2
+              exit 1
+            fi
+            release_exists=true
+          else
+            status=$?
+            if [[ "$status" != 1 ]]; then exit "$status"; fi
+          fi
+
+          if resource_exists "repos/$REPOSITORY/git/ref/tags/pre-release"; then
+            gh api --method PATCH "repos/$REPOSITORY/git/refs/tags/pre-release" \
+              -f "sha=$SOURCE_SHA" -F force=true --silent
+          else
+            status=$?
+            if [[ "$status" != 1 ]]; then exit "$status"; fi
+            gh api --method POST "repos/$REPOSITORY/git/refs" \
+              -f ref=refs/tags/pre-release -f "sha=$SOURCE_SHA" --silent
+          fi
+
+          if [[ "$release_exists" == true ]]; then
+            gh release delete pre-release --yes -R "$REPOSITORY"
+          fi
+          gh release create pre-release "${assets[@]}" \
+            --title "$RELEASE_TITLE" \
+            --verify-tag \
+            --prerelease \
+            --notes-file "$notes_file" \
+            -R "$REPOSITORY"
 
   docker:
     name: Publish Docker Images

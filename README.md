@@ -20,6 +20,8 @@ Windows 使用 `.\miner-login.exe`。从源码运行可使用 `go run ./cmd/mine
 
 授权成功后，会话默认保存到**执行命令时所在目录**下的 `runtime/state/android-session.json`。可用 `-output <路径>` 更改保存位置，用 `-browser <路径>` 指定浏览器；需要代理时使用 `-proxy <代理 URL>`。
 
+登录工具只通过浏览器完成授权并导出会话，不再额外联网校验令牌。浏览器能访问 Twitch，但本机命令行流量没有经过代理或加速器时，也可以正常导出；`-proxy` 用于指定浏览器代理。令牌有效性、账号和 Client-ID 由 `miner-server` 导入时校验，因此运行服务的环境仍需能连接 Twitch。
+
 本机运行服务时，先导入会话，再启动服务：
 
 ```sh
