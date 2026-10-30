@@ -3,7 +3,6 @@ package inventory
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"twitchdropsminergo/internal/domain"
@@ -14,16 +13,15 @@ type rawGQLClient interface {
 	DoRaw(context.Context, gql.RawQuery) (gql.Response, error)
 }
 
-const catalogAccountChannelLimit = 3
-
 const catalogAccountFields = `id self { isAccountConnected } timeBasedDrops {
  id self { isClaimed currentMinutesWatched dropInstanceID }
 }`
 
-const catalogAccountGameQuery = `query CatalogAccounts($gameID: ID!) {
+const catalogAccountGameQuery = `query CatalogAccounts($gameID: ID!, $after: Cursor) {
  game(id: $gameID) {
-  streams(first: 3, options: {systemFilters: [DROPS_ENABLED], sort: VIEWER_COUNT}) {
-   edges { node { channel { viewerDropCampaigns { ` + catalogAccountFields + ` } } } }
+  streams(first: 20, after: $after, options: {systemFilters: [DROPS_ENABLED], sort: VIEWER_COUNT}) {
+   edges { cursor node { channel { viewerDropCampaigns { ` + catalogAccountFields + ` } } } }
+   pageInfo { hasNextPage }
   }
  }
 }`
@@ -34,21 +32,12 @@ const catalogAccountChannelQuery = `query CatalogChannelAccounts($channelID: ID!
 
 func (r *Refresher) resolveCatalogAccounts(ctx context.Context, payload map[string]any, options RefreshOptions) error {
 	pending := make(map[string]map[string]any)
-	games := make(map[string]struct{})
-	channels := make(map[string]struct{})
 	for id, value := range payload {
 		campaign := optionalMap(value)
 		if !catalogNeedsAccount(campaign, options) {
 			continue
 		}
 		pending[id] = campaign
-		allowed := parseAllowedChannels(campaign["allow"])
-		if len(allowed) == 0 {
-			games[stringValue(optionalMap(campaign["game"]), "id")] = struct{}{}
-		}
-		for _, channel := range allowed[:min(len(allowed), catalogAccountChannelLimit)] {
-			channels[fmt.Sprint(channel.ID)] = struct{}{}
-		}
 	}
 	if len(pending) == 0 {
 		return nil
@@ -62,29 +51,61 @@ func (r *Refresher) resolveCatalogAccounts(ctx context.Context, payload map[stri
 	for _, campaign := range pending {
 		checked = append(checked, campaign)
 	}
-	for _, channelID := range sortedAccountIDs(channels) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if !pendingAccountChannel(pending, channelID) {
+	queriedChannels := make(map[string]struct{})
+	queriedGames := make(map[string]struct{})
+	for _, id := range orderedAccountCampaigns(pending, options.PriorityGames) {
+		campaign := pending[id]
+		if campaign == nil {
 			continue
 		}
-		response, err := client.DoRaw(ctx, gql.RawQuery{Query: catalogAccountChannelQuery, Variables: map[string]any{"channelID": channelID}})
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		allowed := parseAllowedChannels(campaign["allow"])
+		if len(allowed) == 0 {
+			gameID := stringValue(optionalMap(campaign["game"]), "id")
+			if _, seen := queriedGames[gameID]; seen {
+				continue
 			}
-			r.logger.Warn("校验目录活动账号资格失败", "channel_id", channelID, "error", err)
+			queriedGames[gameID] = struct{}{}
+			if err := r.resolveCatalogGameAccounts(ctx, client, gameID, pending); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				for pendingID, unresolved := range pending {
+					if stringValue(optionalMap(unresolved["game"]), "id") == gameID && len(parseAllowedChannels(unresolved["allow"])) == 0 {
+						r.logger.Warn("游戏目录活动账号资格仍未确认", "campaign_id", pendingID, "campaign_name", stringValue(unresolved, "name"), "game_id", gameID, "error", err)
+					}
+				}
+			}
 			continue
 		}
-		applyCatalogAccounts(pending, optionalMap(optionalMap(response.Data)["channel"])["viewerDropCampaigns"])
-	}
-	for _, gameID := range sortedAccountIDs(games) {
-		if err := r.resolveCatalogGameAccounts(ctx, client, gameID, pending); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		queried, failed := 0, 0
+		for offset := 0; offset < len(allowed) && pending[id] != nil; {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			r.logger.Warn("校验目录活动账号资格失败", "game_id", gameID, "error", err)
+			channelIDs := make([]string, 0, catalogAccountChannelBatchSize)
+			for offset < len(allowed) && len(channelIDs) < catalogAccountChannelBatchSize {
+				channelID := fmt.Sprint(allowed[offset].ID)
+				offset++
+				if _, seen := queriedChannels[channelID]; seen {
+					continue
+				}
+				queriedChannels[channelID] = struct{}{}
+				channelIDs = append(channelIDs, channelID)
+			}
+			if len(channelIDs) == 0 {
+				continue
+			}
+			queried += len(channelIDs)
+			if err := resolveCatalogChannelAccounts(ctx, client, channelIDs, pending); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				failed++
+				r.logger.Warn("校验目录活动账号资格失败", "campaign_id", id, "channel_count", len(channelIDs), "error", err)
+			}
+		}
+		if pending[id] != nil {
+			r.logger.Warn("白名单活动账号资格仍未确认", "campaign_id", id, "campaign_name", stringValue(campaign, "name"), "allowed_channel_count", len(allowed), "queried_channel_count", queried, "failed_request_count", failed, "reason", "白名单频道未返回完整账号数据")
 		}
 	}
 	linked, unlinked := 0, 0
@@ -139,26 +160,6 @@ func accountGameListed(name string, names []string) bool {
 	return false
 }
 
-func sortedAccountIDs(values map[string]struct{}) []string {
-	ids := make([]string, 0, len(values))
-	for id := range values {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-func pendingAccountChannel(pending map[string]map[string]any, channelID string) bool {
-	for _, campaign := range pending {
-		for _, channel := range parseAllowedChannels(campaign["allow"]) {
-			if fmt.Sprint(channel.ID) == channelID {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func pendingAccountGame(pending map[string]map[string]any, gameID string) bool {
 	for _, campaign := range pending {
 		if stringValue(optionalMap(campaign["game"]), "id") == gameID && len(parseAllowedChannels(campaign["allow"])) == 0 {
@@ -175,19 +176,54 @@ func (r *Refresher) resolveCatalogGameAccounts(ctx context.Context, client rawGQ
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	response, err := client.DoRaw(ctx, gql.RawQuery{Query: catalogAccountGameQuery, Variables: map[string]any{"gameID": gameID}})
-	if err != nil {
-		return err
+	var after any
+	seen := make(map[string]struct{})
+	pages, channels := 0, 0
+	for pendingAccountGame(pending, gameID) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		response, err := client.DoRaw(ctx, gql.RawQuery{Query: catalogAccountGameQuery, Variables: map[string]any{"gameID": gameID, "after": after}})
+		if err != nil {
+			return err
+		}
+		pages++
+		streams := optionalMap(optionalMap(optionalMap(response.Data)["game"])["streams"])
+		edges, err := sliceFromMap(streams, "edges")
+		if err != nil {
+			return err
+		}
+		channels += len(edges)
+		for _, value := range edges {
+			edge := optionalMap(value)
+			channel := optionalMap(optionalMap(edge["node"])["channel"])
+			applyCatalogAccounts(pending, channel["viewerDropCampaigns"])
+		}
+		if !pendingAccountGame(pending, gameID) {
+			break
+		}
+		pageInfo := optionalMap(streams["pageInfo"])
+		hasNext, known := pageInfo["hasNextPage"].(bool)
+		if !known {
+			return fmt.Errorf("游戏 %s 资格查询缺少分页状态", gameID)
+		}
+		if !hasNext {
+			break
+		}
+		if len(edges) == 0 {
+			return fmt.Errorf("游戏 %s 资格查询下一页为空", gameID)
+		}
+		cursor := stringValue(optionalMap(edges[len(edges)-1]), "cursor")
+		if _, repeated := seen[cursor]; cursor == "" || repeated {
+			return fmt.Errorf("游戏 %s 资格查询分页游标未前进", gameID)
+		}
+		seen[cursor] = struct{}{}
+		after = cursor
 	}
-	streams := optionalMap(optionalMap(optionalMap(response.Data)["game"])["streams"])
-	edges, err := sliceFromMap(streams, "edges")
-	if err != nil {
-		return err
-	}
-	for _, value := range edges {
-		edge := optionalMap(value)
-		channel := optionalMap(optionalMap(edge["node"])["channel"])
-		applyCatalogAccounts(pending, channel["viewerDropCampaigns"])
+	for id, campaign := range pending {
+		if stringValue(optionalMap(campaign["game"]), "id") == gameID && len(parseAllowedChannels(campaign["allow"])) == 0 {
+			r.logger.Warn("游戏目录活动账号资格仍未确认", "campaign_id", id, "campaign_name", stringValue(campaign, "name"), "page_count", pages, "channel_count", channels, "reason", "在线频道已查完，未返回完整账号数据")
+		}
 	}
 	return nil
 }

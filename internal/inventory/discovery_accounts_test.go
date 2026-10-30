@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -126,7 +127,7 @@ func TestCatalogAccountResolutionPreservesInventoryState(t *testing.T) {
 	}
 }
 
-func TestCatalogAccountResolutionBoundsAndDeduplicatesAllowedChannels(t *testing.T) {
+func TestCatalogAccountResolutionChecksAllAllowedChannelsOnce(t *testing.T) {
 	first, second := accountTestCampaign(), accountTestCampaign()
 	channels := []any{map[string]any{"id": "1", "name": "one"}, map[string]any{"id": "2", "name": "two"}, map[string]any{"id": "3", "name": "three"}, map[string]any{"id": "4", "name": "four"}}
 	for _, campaign := range []map[string]any{first, second} {
@@ -136,7 +137,7 @@ func TestCatalogAccountResolutionBoundsAndDeduplicatesAllowedChannels(t *testing
 	calls := 0
 	r := accountTestRefresher(&fakeGQLClient{rawFunc: func(_ context.Context, query gql.RawQuery) (gql.Response, error) {
 		calls++
-		if query.Variables["channelID"] == "4" || query.Variables["gameID"] != nil {
+		if query.Variables["gameID"] != nil {
 			t.Fatalf("unexpected channel target: %+v", query.Variables)
 		}
 		return gql.Response{}, nil
@@ -144,7 +145,7 @@ func TestCatalogAccountResolutionBoundsAndDeduplicatesAllowedChannels(t *testing
 	if err := r.resolveCatalogAccounts(context.Background(), map[string]any{"prime-time": first, "another-campaign": second}, RefreshOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 3 {
+	if calls != 1 {
 		t.Fatalf("channel request count = %d", calls)
 	}
 }
@@ -155,5 +156,151 @@ func TestCatalogAccountResolutionPropagatesCancellation(t *testing.T) {
 	r := accountTestRefresher(&fakeGQLClient{})
 	if err := r.resolveCatalogAccounts(ctx, map[string]any{"prime-time": accountTestCampaign()}, RefreshOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation was swallowed: %v", err)
+	}
+}
+
+func TestCatalogAccountResolutionFindsCampaignBeyondFirstChannelBatch(t *testing.T) {
+	for _, target := range []string{"4", "11"} {
+		t.Run(target, func(t *testing.T) {
+			campaign := accountTestCampaign()
+			channels := []any{}
+			for index := 1; index <= 25; index++ {
+				id := fmt.Sprint(index)
+				channels = append(channels, map[string]any{"id": id, "name": "channel" + id})
+			}
+			campaign["allow"] = map[string]any{"isEnabled": true, "channels": channels}
+			calls := 0
+			seen := make(map[string]bool)
+			r := accountTestRefresher(&fakeGQLClient{rawFunc: func(_ context.Context, q gql.RawQuery) (gql.Response, error) {
+				calls++
+				data := map[string]any{}
+				for key, value := range q.Variables {
+					id := value.(string)
+					if seen[id] {
+						t.Fatalf("channel queried twice: %s", id)
+					}
+					seen[id] = true
+					observed := []any{}
+					if id == target {
+						observed = append(observed, accountTestObservation(true))
+					}
+					data[key] = map[string]any{"viewerDropCampaigns": observed}
+				}
+				return gql.Response{Data: data}, nil
+			}})
+			if err := r.resolveCatalogAccounts(context.Background(), map[string]any{"prime-time": campaign}, RefreshOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			expectedCalls := 1
+			if target == "11" {
+				expectedCalls = 2
+			}
+			if calls != expectedCalls || !boolValue(optionalMap(campaign["self"]), "isAccountConnected") {
+				t.Fatalf("late channel not resolved: calls=%d", calls)
+			}
+		})
+	}
+}
+
+func accountTestPage(cursor string, hasNext bool, observations ...any) gql.Response {
+	response := accountTestResponse(observations...)
+	streams := optionalMap(optionalMap(optionalMap(response.Data)["game"])["streams"])
+	streams["pageInfo"] = map[string]any{"hasNextPage": hasNext}
+	optionalMap(streams["edges"].([]any)[0])["cursor"] = cursor
+	return response
+}
+
+func TestCatalogAccountResolutionFindsCampaignOnLaterGamePage(t *testing.T) {
+	campaign := accountTestCampaign()
+	calls := 0
+	r := accountTestRefresher(&fakeGQLClient{rawFunc: func(_ context.Context, q gql.RawQuery) (gql.Response, error) {
+		calls++
+		if calls == 1 {
+			if q.Variables["after"] != nil {
+				t.Fatal("first page has a cursor")
+			}
+			return accountTestPage("page-one", true), nil
+		}
+		if q.Variables["after"] != "page-one" {
+			t.Fatalf("cursor not advanced: %+v", q.Variables)
+		}
+		return accountTestPage("page-two", true, accountTestObservation(true)), nil
+	}})
+	if err := r.resolveCatalogAccounts(context.Background(), map[string]any{"prime-time": campaign}, RefreshOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || !boolValue(optionalMap(campaign["self"]), "isAccountConnected") {
+		t.Fatalf("later page not resolved: calls=%d", calls)
+	}
+}
+
+func TestCatalogAccountPaginationStopsAtExhaustionOrInvalidCursor(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		next    bool
+		cursor  string
+		calls   int
+		wantErr bool
+	}{
+		{"exhausted", false, "", 1, false},
+		{"missing cursor", true, "", 1, true},
+		{"repeated cursor", true, "same", 2, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			r := accountTestRefresher(&fakeGQLClient{rawFunc: func(context.Context, gql.RawQuery) (gql.Response, error) {
+				calls++
+				return accountTestPage(test.cursor, test.next), nil
+			}})
+			pending := map[string]map[string]any{"prime-time": accountTestCampaign()}
+			client := r.gqlClient.(rawGQLClient)
+			err := r.resolveCatalogGameAccounts(context.Background(), client, "1910103699", pending)
+			if (err != nil) != test.wantErr || calls != test.calls || len(pending) != 1 {
+				t.Fatalf("calls=%d pending=%d err=%v", calls, len(pending), err)
+			}
+		})
+	}
+}
+
+func TestCatalogAccountResolutionChecksPriorityCampaignFirst(t *testing.T) {
+	first, second := accountTestCampaign(), accountTestCampaign()
+	first["id"] = "a-other"
+	first["game"] = map[string]any{"id": "1", "displayName": "Other"}
+	first["allow"] = map[string]any{"isEnabled": true, "channels": []any{map[string]any{"id": "1", "name": "other"}}}
+	second["id"] = "z-priority"
+	second["allow"] = map[string]any{"isEnabled": true, "channels": []any{map[string]any{"id": "2", "name": "priority"}}}
+	calls := []string{}
+	r := accountTestRefresher(&fakeGQLClient{rawFunc: func(_ context.Context, q gql.RawQuery) (gql.Response, error) {
+		calls = append(calls, q.Variables["channelID"].(string))
+		return gql.Response{}, nil
+	}})
+	if err := r.resolveCatalogAccounts(context.Background(), map[string]any{"a-other": first, "z-priority": second}, RefreshOptions{PriorityGames: []string{"THE FINALS"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[0] != "2" {
+		t.Fatalf("priority lookup order=%v", calls)
+	}
+}
+func TestCatalogAccountPaginationPreservesUnknownAfterLaterPageFailure(t *testing.T) {
+	for _, cancelRequest := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		r := accountTestRefresher(&fakeGQLClient{rawFunc: func(context.Context, gql.RawQuery) (gql.Response, error) {
+			calls++
+			if calls == 1 {
+				return accountTestPage("first", true), nil
+			}
+			if cancelRequest {
+				cancel()
+				return gql.Response{}, context.Canceled
+			}
+			return gql.Response{}, errors.New("next page unavailable")
+		}})
+		pending := map[string]map[string]any{"prime-time": accountTestCampaign()}
+		err := r.resolveCatalogGameAccounts(ctx, r.gqlClient.(rawGQLClient), "1910103699", pending)
+		cancel()
+		if err == nil || calls != 2 || len(pending) != 1 {
+			t.Fatalf("failed page changed eligibility: err=%v calls=%d pending=%d", err, calls, len(pending))
+		}
 	}
 }
