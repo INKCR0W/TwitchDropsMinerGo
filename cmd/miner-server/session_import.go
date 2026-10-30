@@ -17,6 +17,18 @@ import (
 func runSessionImport(layout runtime.Layout, settings config.Settings, logger *slog.Logger, path string, stdin io.Reader, stdout io.Writer) int {
 	input := stdin
 	if path != "-" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		lock, err := runtime.AcquireSessionLock(ctx, path)
+		if err != nil {
+			logger.Error("获取会话文件锁失败", "error", err)
+			return 1
+		}
+		defer func() {
+			if err := lock.Close(); err != nil {
+				logger.Warn("释放会话文件锁失败", "error", err)
+			}
+		}()
 		file, err := os.Open(path)
 		if err != nil {
 			logger.Error("打开会话文件失败", "error", err)

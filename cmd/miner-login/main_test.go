@@ -13,6 +13,7 @@ import (
 	"twitchdropsminergo/internal/auth"
 	"twitchdropsminergo/internal/browserlogin"
 	"twitchdropsminergo/internal/httpclient"
+	"twitchdropsminergo/internal/runtime"
 )
 
 type failingWriter struct{}
@@ -36,6 +37,27 @@ func TestParseArgs(t *testing.T) {
 		if _, err := parseArgs(args); err == nil {
 			t.Fatal("invalid args accepted")
 		}
+	}
+}
+
+func TestLoginAndServerShareDefaultSessionPath(t *testing.T) {
+	for _, args := range [][]string{nil, {"-runtime-dir", t.TempDir()}} {
+		o, err := parseArgs(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layout, err := runtime.ResolveLayout(o.RuntimeDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.Output != layout.SessionFile {
+			t.Fatalf("登录导出与服务端默认导入路径不一致: %q != %q", o.Output, layout.SessionFile)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "custom-session.json")
+	o, err := parseArgs([]string{"-runtime-dir", "another-runtime", "-output", path})
+	if err != nil || o.Output != path {
+		t.Fatalf("自定义输出路径失效: %q %v", o.Output, err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 )
 
 const DefaultRootDir = "runtime"
+const SessionFileName = "android-session.json"
 
 type Layout struct {
 	RootDir          string
@@ -16,6 +17,7 @@ type Layout struct {
 	StateDir         string
 	StateFile        string
 	CookiesFile      string
+	SessionFile      string
 	RewardsFile      string
 	ProgressFile     string
 	LogsDir          string
@@ -45,6 +47,7 @@ func ResolveLayout(rootDir string) (Layout, error) {
 		StateDir:         stateDir,
 		StateFile:        filepath.Join(stateDir, "state.json"),
 		CookiesFile:      filepath.Join(stateDir, "cookies.json"),
+		SessionFile:      filepath.Join(stateDir, SessionFileName),
 		RewardsFile:      filepath.Join(stateDir, "rewards.json"),
 		ProgressFile:     filepath.Join(stateDir, "progress.json"),
 		LogsDir:          logsDir,

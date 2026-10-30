@@ -18,3 +18,13 @@ func TestResolveLayoutPendingLoginFile(t *testing.T) {
 		t.Fatalf("PendingLoginFile 不匹配: got %q want %q", layout.PendingLoginFile, want)
 	}
 }
+
+func TestResolveLayoutSessionFile(t *testing.T) {
+	layout, err := ResolveLayout(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.SessionFile != filepath.Join(layout.StateDir, SessionFileName) {
+		t.Fatalf("会话路径未使用共享文件名: %q", layout.SessionFile)
+	}
+}

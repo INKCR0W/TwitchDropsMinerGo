@@ -20,7 +20,7 @@ concurrency:
 jobs:
   prepare:
     name: Prepare Release Metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       artifact_prefix: ${{ steps.meta.outputs.artifact_prefix }}
     steps:
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload release metadata
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-metadata
           path: dist/meta/release-metadata.env
@@ -86,7 +86,7 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
           - windows-latest
           - macos-latest
     steps:
@@ -132,7 +132,7 @@ jobs:
   package:
     name: Package (${{ matrix.goos }}/${{ matrix.goarch }})
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs:
       - prepare
       - verify
@@ -216,7 +216,7 @@ jobs:
           echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-package-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ steps.pack.outputs.archive_path }}

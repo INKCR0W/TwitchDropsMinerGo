@@ -18,7 +18,7 @@ import (
 const SessionVersion = 1
 const maxSessionBytes = 64 * 1024
 
-var ErrLoginRequired = errors.New("需要浏览器登录：请运行 miner-login，再用 miner-server -import-session 导入会话")
+var ErrLoginRequired = errors.New("需要浏览器登录：请运行 miner-login，再使用相同的 -runtime-dir 启动服务；也可用 miner-server -import-session 显式导入会话")
 
 type Session struct {
 	Version     int    `json:"version"`

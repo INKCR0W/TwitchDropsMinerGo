@@ -138,7 +138,7 @@ func run(args []string) int {
 		}
 	}()
 
-	authState, err := auth.New(auth.Options{
+	baseAuthState, err := auth.New(auth.Options{
 		HTTPClient:           httpClient,
 		ClientInfo:           clientInfo,
 		DeviceCodeHandler:    deviceCodeNotifier(logger, os.Stdout, layout.PendingLoginFile),
@@ -147,6 +147,7 @@ func run(args []string) int {
 	if err != nil {
 		return failRun(application, logger, "初始化认证状态失败", err)
 	}
+	authState := &portableAuthState{State: baseAuthState, sessionFile: layout.SessionFile, logger: logger}
 
 	gqlClient, err := gql.NewClient(gql.ClientOptions{
 		HTTPClient: httpClient,
