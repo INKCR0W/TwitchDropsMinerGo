@@ -4,14 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -37,7 +33,7 @@ func Login(ctx context.Context, options Options) (token string, resultErr error)
 	}
 	defer func() {
 		var cleanupErr error
-		for attempt := 0; attempt < 10; attempt++ {
+		for attempt := 0; attempt < 50; attempt++ {
 			cleanupErr = os.RemoveAll(profile)
 			if cleanupErr == nil {
 				break
@@ -49,19 +45,20 @@ func Login(ctx context.Context, options Options) (token string, resultErr error)
 			token = ""
 		}
 	}()
-	args := []string{"--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check", "about:blank"}
-	if options.Proxy != "" {
-		args = append([]string{"--proxy-server=" + options.Proxy}, args...)
+	launch, err := newBrowserLaunch(profile)
+	if err != nil {
+		return "", err
 	}
-	command := exec.Command(binary, args...)
+	command := exec.Command(binary, launch.arguments(options.Proxy)...)
 	if err := command.Start(); err != nil {
 		return "", errors.New("启动浏览器失败")
 	}
-	exited := make(chan struct{})
-	go func() { _ = command.Wait(); close(exited) }()
+	exited := make(chan error, 1)
+	processDone := make(chan struct{})
+	go func() { exited <- command.Wait(); close(processDone) }()
 	defer func() {
 		select {
-		case <-exited:
+		case <-processDone:
 			return
 		case <-time.After(time.Second):
 		}
@@ -70,17 +67,21 @@ func Login(ctx context.Context, options Options) (token string, resultErr error)
 			token = ""
 		}
 		select {
-		case <-exited:
+		case <-processDone:
 		case <-time.After(5 * time.Second):
 			resultErr = errors.Join(resultErr, errors.New("等待登录浏览器退出超时"))
 			token = ""
 		}
 	}()
-	endpoint, err := waitDebugger(ctx, profile, exited)
+	endpoint, err := waitDebugger(ctx, &launch, exited)
 	if err != nil {
-		return "", err
+		return "", errors.Join(err, closeOwnedBrowser(launch.ownedEndpoint))
 	}
-	return capture(ctx, endpoint, address, state)
+	token, err = capture(ctx, endpoint, address, state)
+	if err != nil {
+		return "", errors.Join(err, closeOwnedBrowser(launch.ownedEndpoint))
+	}
+	return token, nil
 }
 
 func findBrowser(requested string) (string, error) {
@@ -107,57 +108,6 @@ func findBrowser(requested string) (string, error) {
 		}
 	}
 	return "", errors.New("没有找到 Chrome 或 Edge，请使用 -browser 指定浏览器路径")
-}
-
-func waitDebugger(ctx context.Context, profile string, exited <-chan struct{}) (string, error) {
-	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{Proxy: nil}}
-	defer client.CloseIdleConnections()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-exited:
-			return "", errors.New("浏览器已关闭")
-		case <-ticker.C:
-		}
-		data, err := os.ReadFile(filepath.Join(profile, "DevToolsActivePort"))
-		if err != nil {
-			continue
-		}
-		parts := strings.Split(string(data), "\n")
-		port, err := strconv.Atoi(parts[0])
-		if err != nil || port < 1 || port > 65535 {
-			continue
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/json/list", port), nil)
-		if err != nil {
-			return "", errors.New("创建浏览器连接失败")
-		}
-		response, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-		var targets []struct {
-			Type string `json:"type"`
-			URL  string `json:"webSocketDebuggerUrl"`
-		}
-		err = json.NewDecoder(http.MaxBytesReader(nil, response.Body, 1<<20)).Decode(&targets)
-		closeErr := response.Body.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			continue
-		}
-		prefix := fmt.Sprintf("ws://127.0.0.1:%d/", port)
-		for _, target := range targets {
-			if target.Type == "page" && strings.HasPrefix(target.URL, prefix) {
-				return target.URL, nil
-			}
-		}
-	}
 }
 
 func capture(ctx context.Context, endpoint, address, state string) (token string, resultErr error) {
