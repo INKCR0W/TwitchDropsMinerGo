@@ -104,7 +104,7 @@ func (s *Scheduler) canWatch(channel domain.Channel) bool {
 	}
 
 	for _, campaign := range snapshot.Inventory {
-		if campaign == nil || !campaign.CanEarn(now, &channel, settings.EnableBadgesEmotes, false) {
+		if !campaignAllowed(campaign, settings) || !campaign.CanEarn(now, &channel, settings.EnableBadgesEmotes, false) {
 			continue
 		}
 		game := channel.CurrentGame()

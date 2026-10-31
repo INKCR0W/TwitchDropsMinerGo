@@ -60,6 +60,7 @@ type State struct {
 	validateMu      sync.Mutex
 	mu              sync.Mutex
 	userID          int64
+	boundUserID     int64
 	deviceID        string
 	sessionID       string
 	accessToken     string

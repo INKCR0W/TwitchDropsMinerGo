@@ -36,8 +36,7 @@ func computeSmartWantedGames(campaigns []*domain.DropsCampaign, now time.Time, n
 	bestByGame := make(map[string]smartGameCandidate)
 	anyPriorityBelowSafety := false
 	for _, campaign := range campaigns {
-		if campaign == nil ||
-			stringInList(campaign.Game.Name, settings.Exclude) ||
+		if !campaignAllowed(campaign, settings) ||
 			!campaign.CanEarnWithin(now, nextHour, settings.EnableBadgesEmotes) ||
 			campaignCertainlyUnfinishable(campaign, now) {
 			continue

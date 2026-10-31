@@ -120,11 +120,12 @@ func (d *TimedDrop) canEarnWithin(stamp time.Time, now time.Time) bool {
 }
 
 func (d *TimedDrop) baseEarnConditions() bool {
+	// reward 只有本地计数，不受普通掉宝等待服务端校准的推测分钟上限约束
 	return d != nil &&
 		d.BaseDrop.baseEarnConditions() &&
 		d.RequiredMinutes > 0 &&
 		d.CurrentMinutes() < d.RequiredMinutes &&
-		d.ExtraCurrentMinutes < MaxExtraMinutes
+		(d.ExtraCurrentMinutes < MaxExtraMinutes || (d.Campaign != nil && d.Campaign.IsRewardCampaign))
 }
 
 // Twitch 对同一活动同一时间窗的 drop 只维护一个累计观看计数, 各 drop 只是阈值不同
@@ -179,7 +180,7 @@ func (d *TimedDrop) BumpMinutes(now time.Time, channel *Channel, enableBadgesEmo
 }
 
 func (d *TimedDrop) BumpMinutesUntilRequired(now time.Time, channel *Channel, enableBadgesEmotes bool, ignoreChannelStatus bool) bool {
-	if d == nil || d.IsClaimed {
+	if d == nil || d.RequiredMinutes <= 0 || !d.BaseDrop.baseEarnConditions() || now.Before(d.StartsAt) || !now.Before(d.EndsAt) {
 		return false
 	}
 	if d.CurrentMinutes() >= d.RequiredMinutes {

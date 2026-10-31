@@ -42,17 +42,17 @@ func (s *State) ensureAuthenticated(ctx context.Context) error {
 		return s.ensureBrowserAuthenticated(ctx)
 	}
 	var validated validateResponse
+	var accessToken string
 
 	for clientMismatchAttempt := 0; clientMismatchAttempt < 2; clientMismatchAttempt++ {
 		for invalidTokenAttempt := 0; invalidTokenAttempt < 2; invalidTokenAttempt++ {
-			accessToken := s.currentAccessToken()
+			accessToken = s.currentAccessToken()
 			if accessToken == "" {
 				var err error
 				accessToken, err = s.restoreAccessToken(ctx)
 				if err != nil {
 					return err
 				}
-				s.setAccessToken(accessToken)
 			}
 
 			response, statusCode, err := s.validateAccessToken(ctx, accessToken)
@@ -106,10 +106,13 @@ func (s *State) ensureAuthenticated(ctx context.Context) error {
 		return fmt.Errorf("验证 access token 失败: user_id 无效")
 	}
 
-	accessToken := s.currentAccessToken()
 	if accessToken == "" {
 		return fmt.Errorf("保存认证 Cookie 失败: access token 为空")
 	}
+	if err := s.checkBoundUser(userID); err != nil {
+		return err
+	}
+	s.setAccessToken(accessToken)
 	s.setValidatedAccessState(userID)
 	s.updatePersistentCookies(accessToken, validated.UserID)
 	if err := s.httpClient.CookieJar().Save(); err != nil {

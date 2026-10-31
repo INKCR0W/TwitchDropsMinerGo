@@ -90,7 +90,7 @@ func (s *Scheduler) handleIdle() {
 func (s *Scheduler) hasInventorySnapshot() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.snapshot.Inventory) > 0 || len(s.snapshot.Campaigns) > 0 || len(s.snapshot.Drops) > 0
+	return s.inventoryInitialized
 }
 
 func (s *Scheduler) handleRuntimeError(ctx context.Context, state State, err error) error {

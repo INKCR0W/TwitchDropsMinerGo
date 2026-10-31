@@ -98,6 +98,8 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 		s.logDropOverviewLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 		if completed {
 			completed = s.recordRewardCompletedLocked(activeCampaign, now)
+		} else {
+			s.recordRewardPartialProgressLocked(activeCampaign, now)
 		}
 		return completed, false, true
 	}
@@ -106,6 +108,45 @@ func (s *Scheduler) bumpActiveCampaign(now time.Time, channel *domain.Channel) (
 	s.lastProgressAt = progressAt
 	s.logDropOverviewLocked(activeCampaign, activeCampaign.FirstEarnableDrop(now, channel, s.settings.EnableBadgesEmotes, false))
 	return false, reachedLimit, true
+}
+
+func (s *Scheduler) recordRewardPartialProgressLocked(campaign *domain.DropsCampaign, now time.Time) {
+	if s.rewardProgress == nil {
+		return
+	}
+	for _, drop := range campaign.Drops() {
+		if drop == nil || drop.IsClaimed || drop.CurrentMinutes() <= 0 {
+			continue
+		}
+		if _, err := s.rewardProgress.RecordPartialProgress(campaign.ID, drop.ID, drop.CurrentMinutes(), now, campaign.EndsAt); err != nil {
+			s.logger.Warn("保存 reward campaign 观看进度失败", "campaign_id", campaign.ID, "drop_id", drop.ID, "error", err)
+		}
+	}
+}
+
+// mergeRewardProgressLocked 保留请求期间新增或尚未落盘的本地分钟，只合并同一活动时间窗
+func (s *Scheduler) mergeRewardProgressLocked(snapshot inventory.Snapshot, now time.Time) {
+	for id, current := range s.snapshot.Campaigns {
+		next := snapshot.Campaigns[id]
+		if current == nil || next == nil || !current.IsRewardCampaign || !next.IsRewardCampaign ||
+			!current.StartsAt.Equal(next.StartsAt) || !current.EndsAt.Equal(next.EndsAt) || !now.Before(next.EndsAt) {
+			continue
+		}
+		for _, previousDrop := range current.Drops() {
+			if previousDrop == nil {
+				continue
+			}
+			drop := next.Drop(previousDrop.ID)
+			if drop == nil || !drop.StartsAt.Equal(previousDrop.StartsAt) || !drop.EndsAt.Equal(previousDrop.EndsAt) || !now.Before(drop.EndsAt) {
+				continue
+			}
+			if previousDrop.IsClaimed {
+				drop.MarkClaimed()
+			} else if previousDrop.CurrentMinutes() > drop.CurrentMinutes() {
+				next.ObserveMinutes(drop, previousDrop.CurrentMinutes())
+			}
+		}
+	}
 }
 
 func (s *Scheduler) recordRewardCompletedLocked(campaign *domain.DropsCampaign, now time.Time) bool {

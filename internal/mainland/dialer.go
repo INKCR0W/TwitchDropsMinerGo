@@ -36,6 +36,7 @@ type Dialer struct {
 
 	dohMu      sync.Mutex
 	dohClients map[string]*http.Client // 按端点缓存, 复用底层 TLS 连接
+	closed     bool
 }
 
 // New 按 connectionQuality(1..6, 越大网络越差) 缩放拨号与 DoH 超时
@@ -61,6 +62,12 @@ func New(logger *slog.Logger, connectionQuality int) *Dialer {
 }
 
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	d.dohMu.Lock()
+	closed := d.closed
+	d.dohMu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("大陆模式 dialer 已关闭")
+	}
 	conn, err := d.dial(ctx, addr)
 	if err != nil {
 		return nil, err
@@ -184,28 +191,50 @@ func (d *Dialer) dohGetVia(ctx context.Context, endpoint, path string) ([]byte, 
 	req.Header.Set("Accept", "application/dns-json")
 	resp, err := client.Do(req)
 	if err != nil {
-		d.evictDoHClient(endpoint)
+		d.evictDoHClient(endpoint, client)
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		d.evictDoHClient(endpoint)
+		d.evictDoHClient(endpoint, client)
 		return nil, fmt.Errorf("DoH 端点 %s 返回 %s", endpoint, resp.Status)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 }
 
 // evictDoHClient 清除某端点的缓存 client, 使下次查询重新解析 IP 并重建 transport
-func (d *Dialer) evictDoHClient(endpoint string) {
+func (d *Dialer) evictDoHClient(endpoint string, client *http.Client) {
 	d.dohMu.Lock()
-	delete(d.dohClients, endpoint)
+	if d.dohClients[endpoint] == client {
+		delete(d.dohClients, endpoint)
+	}
 	d.dohMu.Unlock()
+	client.CloseIdleConnections()
+}
+
+// Close 回收 DoH 连接池并禁止重新创建; 活跃请求仍由各自上下文管理
+func (d *Dialer) Close() {
+	if d == nil {
+		return
+	}
+	d.dohMu.Lock()
+	d.closed = true
+	clients := d.dohClients
+	d.dohClients = nil
+	d.dohMu.Unlock()
+	for _, client := range clients {
+		client.CloseIdleConnections()
+	}
 }
 
 // dohClientFor 返回按端点缓存的 DoH client, 复用其底层 TLS 连接; 首次调用时解析端点 IP 并建 transport.
 // 解析在锁外进行, 避免多个 goroutine 冷启动时都持锁等待网络; 插入前二次检查, 让先完成者的 client 生效
 func (d *Dialer) dohClientFor(ctx context.Context, endpoint string) (*http.Client, error) {
 	d.dohMu.Lock()
+	if d.closed {
+		d.dohMu.Unlock()
+		return nil, fmt.Errorf("大陆模式 dialer 已关闭")
+	}
 	c, ok := d.dohClients[endpoint]
 	d.dohMu.Unlock()
 	if ok {
@@ -222,6 +251,7 @@ func (d *Dialer) dohClientFor(ctx context.Context, endpoint string) (*http.Clien
 	}
 	tr := &http.Transport{
 		ForceAttemptHTTP2: true,
+		IdleConnTimeout:   90 * time.Second,
 		DialTLSContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			var lastErr error
 			for _, ip := range ips {
@@ -238,7 +268,12 @@ func (d *Dialer) dohClientFor(ctx context.Context, endpoint string) (*http.Clien
 
 	d.dohMu.Lock()
 	defer d.dohMu.Unlock()
+	if d.closed {
+		client.CloseIdleConnections()
+		return nil, fmt.Errorf("大陆模式 dialer 已关闭")
+	}
 	if existing, ok := d.dohClients[endpoint]; ok {
+		client.CloseIdleConnections()
 		return existing, nil // 已被并发的另一次调用插入, 丢弃本次新建的 client
 	}
 	d.dohClients[endpoint] = client

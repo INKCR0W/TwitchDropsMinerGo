@@ -202,6 +202,7 @@ type portableFixture struct {
 	address     *url.URL
 	oldStatus   atomic.Int32
 	newStatus   atomic.Int32
+	newUserID   atomic.Int64
 	oldCalls    atomic.Int32
 	newCalls    atomic.Int32
 	deviceCalls atomic.Int32
@@ -220,6 +221,7 @@ func newPortableFixture(t *testing.T, cookie string) *portableFixture {
 	}
 	f.oldStatus.Store(http.StatusOK)
 	f.newStatus.Store(http.StatusOK)
+	f.newUserID.Store(42)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			f.deviceCalls.Add(1)
@@ -237,7 +239,7 @@ func newPortableFixture(t *testing.T, cookie string) *portableFixture {
 			f.oldCalls.Add(1)
 		case "OAuth new-token":
 			f.newCalls.Add(1)
-			status, user = int(f.newStatus.Load()), "42"
+			status, user = int(f.newStatus.Load()), fmt.Sprint(f.newUserID.Load())
 		default:
 			t.Error("意外的令牌校验")
 			w.WriteHeader(401)

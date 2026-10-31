@@ -19,6 +19,8 @@ func TestRunRetriesInventoryRefreshErrorWhenSnapshotExists(t *testing.T) {
 	now := testTime()
 	game := domain.Game{ID: 1, Name: "Game"}
 	campaign := mustCampaign(t, campaignSpec(now, "campaign-retry", game, now.Add(-time.Hour), now.Add(time.Hour), nil))
+	// 首次装载后进入 idle，避免频道发现失败抢先触发被测的库存重试计数
+	campaign.Drop("campaign-retry-drop").MarkClaimed()
 	stopAfterRetry := errors.New("stop after retry")
 	refreshErr := errors.New("temporary gql failure")
 	var refreshCalls atomic.Int32

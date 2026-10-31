@@ -21,9 +21,7 @@ import (
 	"twitchdropsminergo/internal/httpclient"
 	"twitchdropsminergo/internal/inventory"
 	"twitchdropsminergo/internal/logging"
-	"twitchdropsminergo/internal/progress"
 	"twitchdropsminergo/internal/pubsub"
-	"twitchdropsminergo/internal/rewards"
 	"twitchdropsminergo/internal/runtime"
 	"twitchdropsminergo/internal/scheduler"
 	"twitchdropsminergo/internal/storage"
@@ -128,6 +126,7 @@ func run(args []string) int {
 	}
 
 	mainlandDialer := newMainlandDialer(application.Settings(), logger)
+	defer mainlandDialer.Close()
 
 	clientInfo := httpclient.AndroidAppClient
 	httpClient, err := httpclient.New(httpclient.Options{
@@ -175,15 +174,11 @@ func run(args []string) int {
 		return failRun(application, logger, "初始化 GQL 客户端失败", err)
 	}
 
-	rewardProgress, err := rewards.NewFileStore(layout.RewardsFile)
+	accountProgress, err := initializeAccountProgress(ctx, layout, authState)
 	if err != nil {
-		return failRun(application, logger, "初始化 reward 进度存储失败", err)
+		return failRun(application, logger, "初始化账号进度存储失败", err)
 	}
-
-	watchProgress, err := progress.NewFileStore(layout.ProgressFile)
-	if err != nil {
-		return failRun(application, logger, "初始化观看进度存储失败", err)
-	}
+	rewardProgress, watchProgress := accountProgress.rewards, accountProgress.watch
 
 	refresher, err := inventory.NewRefresher(inventory.Options{
 		GQLClient:      gqlClient,

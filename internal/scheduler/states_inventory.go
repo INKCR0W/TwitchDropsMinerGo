@@ -32,7 +32,9 @@ func (s *Scheduler) handleInventoryFetch(ctx context.Context) error {
 	s.seedObservedProgress(snapshot)
 
 	s.mu.Lock()
+	s.mergeRewardProgressLocked(snapshot, s.nowUTC())
 	s.snapshot = snapshot
+	s.inventoryInitialized = true
 	s.mu.Unlock()
 
 	if err := s.ensureUserTopics(); err != nil {

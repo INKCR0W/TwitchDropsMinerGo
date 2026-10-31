@@ -24,6 +24,7 @@ type Progress struct {
 type Store interface {
 	Snapshot() map[string]Progress
 	RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (Progress, error)
+	RecordPartialProgress(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (Progress, error)
 	RecordCompletion(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (Progress, error)
 	PruneExpired(now time.Time, gracePeriod time.Duration) (int, error)
 }
@@ -73,6 +74,10 @@ func (s *FileStore) RecordCompletion(campaignID string, dropID string, minutesWa
 	return s.recordProgress(campaignID, dropID, minutesWatched, true, now, expiresAt)
 }
 
+func (s *FileStore) RecordPartialProgress(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (Progress, error) {
+	return s.recordProgress(campaignID, dropID, minutesWatched, false, now, expiresAt)
+}
+
 func (s *FileStore) recordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time, expiresAt time.Time) (Progress, error) {
 	if s == nil {
 		return Progress{}, fmt.Errorf("reward 进度存储未初始化")
@@ -114,7 +119,7 @@ func (s *FileStore) recordProgress(campaignID string, dropID string, minutesWatc
 	if completed && current.CompletedAt.IsZero() {
 		current.CompletedAt = now
 	}
-	if completed && !expiresAt.IsZero() {
+	if !expiresAt.IsZero() {
 		current.ExpiresAt = expiresAt
 	}
 	current.UpdatedAt = now

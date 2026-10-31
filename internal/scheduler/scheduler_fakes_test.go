@@ -220,6 +220,10 @@ func (f *fakeRewardProgressStore) RecordCompletion(campaignID string, dropID str
 	return f.recordProgress(campaignID, dropID, minutesWatched, true, now, expiresAt)
 }
 
+func (f *fakeRewardProgressStore) RecordPartialProgress(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (rewards.Progress, error) {
+	return f.recordProgress(campaignID, dropID, minutesWatched, false, now, expiresAt)
+}
+
 func (f *fakeRewardProgressStore) recordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time, expiresAt time.Time) (rewards.Progress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -239,7 +243,7 @@ func (f *fakeRewardProgressStore) recordProgress(campaignID string, dropID strin
 	if completed && progress.CompletedAt.IsZero() {
 		progress.CompletedAt = now.UTC()
 	}
-	if completed && !expiresAt.IsZero() {
+	if !expiresAt.IsZero() {
 		progress.ExpiresAt = expiresAt.UTC()
 	}
 	progress.UpdatedAt = now.UTC()

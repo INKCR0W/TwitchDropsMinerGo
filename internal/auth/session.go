@@ -134,6 +134,9 @@ func (s *State) ImportSession(ctx context.Context, session Session) error {
 		return err
 	}
 	// 校验成功前不覆盖已有会话，输错文件也能继续使用原来的登录
+	if err := s.checkBoundUser(userID); err != nil {
+		return err
+	}
 	s.updatePersistentCookies(session.AccessToken, validated.UserID)
 	if err := s.httpClient.CookieJar().Save(); err != nil {
 		return fmt.Errorf("保存认证 Cookie 失败: %w", err)
@@ -180,6 +183,9 @@ func (s *State) ensureBrowserAuthenticated(ctx context.Context) error {
 	if err != nil {
 		s.clearAccessState()
 		return fmt.Errorf("%w；%v", ErrLoginRequired, err)
+	}
+	if err := s.checkBoundUser(userID); err != nil {
+		return err
 	}
 	s.updatePersistentCookies(token, response.UserID)
 	if err := s.httpClient.CookieJar().Save(); err != nil {

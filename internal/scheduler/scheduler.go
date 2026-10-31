@@ -72,6 +72,7 @@ type AuthState interface {
 type RewardProgressStore interface {
 	Snapshot() map[string]rewards.Progress
 	RecordProgress(campaignID string, dropID string, minutesWatched int, completed bool, now time.Time) (rewards.Progress, error)
+	RecordPartialProgress(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (rewards.Progress, error)
 	RecordCompletion(campaignID string, dropID string, minutesWatched int, now time.Time, expiresAt time.Time) (rewards.Progress, error)
 	PruneExpired(now time.Time, gracePeriod time.Duration) (int, error)
 }
@@ -153,6 +154,7 @@ type Scheduler struct {
 	mu                       sync.RWMutex
 	state                    State
 	snapshot                 inventory.Snapshot
+	inventoryInitialized     bool
 	wantedGames              []domain.Game
 	channels                 map[int64]domain.Channel
 	fullCleanup              bool

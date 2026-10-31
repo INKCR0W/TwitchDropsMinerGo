@@ -25,13 +25,19 @@ func (s *Scheduler) ActiveCampaign(channel *domain.Channel) *domain.DropsCampaig
 		channel = watching
 	}
 
-	return selectActiveCampaign(snapshot.Inventory, now, channel, settings.EnableBadgesEmotes)
+	return selectActiveCampaign(snapshot.Inventory, now, channel, settings)
 }
 
-func selectActiveCampaign(campaigns []*domain.DropsCampaign, now time.Time, channel *domain.Channel, enableBadgesEmotes bool) *domain.DropsCampaign {
+func campaignAllowed(campaign *domain.DropsCampaign, settings config.Settings) bool {
+	return campaign != nil &&
+		!stringInList(campaign.Game.Name, settings.Exclude) &&
+		(settings.PriorityMode != config.PriorityOnly || stringInList(campaign.Game.Name, settings.Priority))
+}
+
+func selectActiveCampaign(campaigns []*domain.DropsCampaign, now time.Time, channel *domain.Channel, settings config.Settings) *domain.DropsCampaign {
 	var selected *domain.DropsCampaign
 	for _, campaign := range campaigns {
-		if campaign == nil || !campaign.CanEarn(now, channel, enableBadgesEmotes, false) {
+		if !campaignAllowed(campaign, settings) || !campaign.CanEarn(now, channel, settings.EnableBadgesEmotes, false) {
 			continue
 		}
 		if selected == nil ||
@@ -75,13 +81,11 @@ func computeLegacyWantedGames(campaigns []*domain.DropsCampaign, now time.Time, 
 
 	wanted := make([]domain.Game, 0)
 	for _, campaign := range campaigns {
-		if campaign == nil {
+		if !campaignAllowed(campaign, settings) {
 			continue
 		}
 		game := campaign.Game
 		if gameInList(game, wanted) ||
-			stringInList(game.Name, settings.Exclude) ||
-			(settings.PriorityMode == config.PriorityOnly && !stringInList(game.Name, settings.Priority)) ||
 			!campaign.CanEarnWithin(now, nextHour, settings.EnableBadgesEmotes) {
 			continue
 		}
@@ -91,13 +95,13 @@ func computeLegacyWantedGames(campaigns []*domain.DropsCampaign, now time.Time, 
 }
 
 func (s *Scheduler) activeCampaignLocked(now time.Time, channel *domain.Channel) *domain.DropsCampaign {
-	return selectActiveCampaign(s.snapshot.Inventory, now, channel, s.settings.EnableBadgesEmotes)
+	return selectActiveCampaign(s.snapshot.Inventory, now, channel, s.settings)
 }
 
 func (s *Scheduler) pendingRewardCompletionCampaignLocked(now time.Time, channel *domain.Channel) *domain.DropsCampaign {
 	var selected *domain.DropsCampaign
 	for _, campaign := range s.snapshot.Inventory {
-		if campaign == nil || !campaign.CanRecordRewardCompletion(now, channel, s.settings.EnableBadgesEmotes, false) {
+		if !campaignAllowed(campaign, s.settings) || !campaign.CanRecordRewardCompletion(now, channel, s.settings.EnableBadgesEmotes, false) {
 			continue
 		}
 		if selected == nil ||
@@ -116,7 +120,7 @@ func (s *Scheduler) campaignCanEarn(campaignID string, channel *domain.Channel) 
 	defer s.mu.RUnlock()
 
 	campaign := s.snapshot.Campaigns[campaignID]
-	if campaign == nil {
+	if !campaignAllowed(campaign, s.settings) {
 		return false
 	}
 	return campaign.CanEarn(now, channel, s.settings.EnableBadgesEmotes, false)

@@ -34,6 +34,10 @@ type testSchedulerOptions struct {
 
 func newTestScheduler(t *testing.T, options testSchedulerOptions) *Scheduler {
 	t.Helper()
+	if options.settings.IsZero() {
+		options.settings = config.DefaultSettings()
+		options.settings.PriorityMode = config.EndingSoonest
+	}
 
 	refresher := options.refresher
 	if refresher == nil {
